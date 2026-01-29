@@ -23,114 +23,129 @@ const cities = [
   { name: "Debrecen", lat: 47.53, lon: 21.63 },
 ];
 
-// Initialize database
+// Initialize database (simple cache table)
 async function initDB() {
-  // Drop old table and create new one with better structure
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS weather_data (
+    CREATE TABLE IF NOT EXISTS weather_cache (
       id SERIAL PRIMARY KEY,
-      city_name VARCHAR(50) NOT NULL,
-      fetch_date DATE NOT NULL,
-      target_date DATE NOT NULL,
-      hour INTEGER NOT NULL,
-      temperature DECIMAL(5,2) NOT NULL,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(city_name, fetch_date, target_date, hour)
+      city_name VARCHAR(50) NOT NULL UNIQUE,
+      data JSONB NOT NULL,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
-  
-  // Index for faster queries
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_weather_city_target 
-    ON weather_data(city_name, target_date)
-  `);
-  
   console.log('Database initialized');
 }
 
-// Get today's date in YYYY-MM-DD format (in Europe/Prague timezone)
-function getLocalDate(offsetDays = 0) {
-  const now = new Date();
-  // Adjust for Central European Time (UTC+1)
-  now.setHours(now.getHours() + 1);
-  now.setDate(now.getDate() + offsetDays);
-  return now.toISOString().split('T')[0];
+// Get date string in YYYY-MM-DD format
+function getDateString(offsetDays = 0) {
+  const date = new Date();
+  date.setDate(date.getDate() + offsetDays);
+  return date.toISOString().split('T')[0];
 }
 
-// Fetch weather data from Open-Meteo
-async function fetchWeatherData(city) {
-  // Get past 3 days and forecast for next 3 days
-  const url = `https://api.open-meteo.com/v1/forecast?latitude=${city.lat}&longitude=${city.lon}&hourly=temperature_2m&past_days=3&forecast_days=3&timezone=Europe%2FPrague`;
+// Fetch weather data from Open-Meteo for a city
+async function fetchWeatherFromAPI(city) {
+  // Get 3 days of history and 2 days forecast
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${city.lat}&longitude=${city.lon}&hourly=temperature_2m&past_days=3&forecast_days=2&timezone=Europe%2FPrague`;
   
   try {
     const response = await fetch(url);
     const data = await response.json();
-    return data;
+    
+    if (!data.hourly) {
+      throw new Error('No hourly data in response');
+    }
+
+    // Parse the data into our 4 days
+    const twoDaysAgo = getDateString(-2);
+    const yesterday = getDateString(-1);
+    const today = getDateString(0);
+    const tomorrow = getDateString(1);
+
+    const result = {
+      twoDaysAgo: { date: twoDaysAgo, temps: Array(24).fill(null) },
+      yesterday: { date: yesterday, temps: Array(24).fill(null) },
+      today: { date: today, temps: Array(24).fill(null) },
+      tomorrow: { date: tomorrow, temps: Array(24).fill(null) },
+      updatedAt: new Date().toISOString()
+    };
+
+    // Fill in temperatures
+    const times = data.hourly.time;
+    const temps = data.hourly.temperature_2m;
+
+    for (let i = 0; i < times.length; i++) {
+      const dateStr = times[i].split('T')[0];
+      const hour = parseInt(times[i].split('T')[1].split(':')[0]);
+      const temp = temps[i];
+
+      if (dateStr === twoDaysAgo) {
+        result.twoDaysAgo.temps[hour] = temp;
+      } else if (dateStr === yesterday) {
+        result.yesterday.temps[hour] = temp;
+      } else if (dateStr === today) {
+        result.today.temps[hour] = temp;
+      } else if (dateStr === tomorrow) {
+        result.tomorrow.temps[hour] = temp;
+      }
+    }
+
+    return result;
   } catch (error) {
-    console.error(`Error fetching weather for ${city.name}:`, error);
+    console.error(`Error fetching weather for ${city.name}:`, error.message);
     return null;
   }
 }
 
-// Store weather data in database
-async function storeWeatherData(cityName, weatherData) {
-  if (!weatherData || !weatherData.hourly) {
-    console.error(`No weather data for ${cityName}`);
-    return;
+// Store weather data in cache
+async function cacheWeatherData(cityName, data) {
+  try {
+    await pool.query(`
+      INSERT INTO weather_cache (city_name, data, updated_at)
+      VALUES ($1, $2, NOW())
+      ON CONFLICT (city_name) 
+      DO UPDATE SET data = $2, updated_at = NOW()
+    `, [cityName, JSON.stringify(data)]);
+    console.log(`Cached weather data for ${cityName}`);
+  } catch (err) {
+    console.error(`Error caching data for ${cityName}:`, err.message);
   }
-
-  const fetchDate = getLocalDate(0); // Today's date as fetch date
-  const times = weatherData.hourly.time;
-  const temps = weatherData.hourly.temperature_2m;
-
-  let stored = 0;
-  for (let i = 0; i < times.length; i++) {
-    const timeStr = times[i];
-    const temp = temps[i];
-    const targetDate = timeStr.split('T')[0];
-    const hour = parseInt(timeStr.split('T')[1].split(':')[0]);
-
-    try {
-      await pool.query(`
-        INSERT INTO weather_data (city_name, fetch_date, target_date, hour, temperature)
-        VALUES ($1, $2, $3, $4, $5)
-        ON CONFLICT (city_name, fetch_date, target_date, hour) 
-        DO UPDATE SET temperature = $5
-      `, [cityName, fetchDate, targetDate, hour, temp]);
-      stored++;
-    } catch (err) {
-      console.error(`Error storing data for ${cityName}:`, err.message);
-    }
-  }
-
-  console.log(`Stored ${stored} weather records for ${cityName}`);
 }
 
-// Fetch and store data for all cities
+// Get cached weather data
+async function getCachedWeather(cityName) {
+  try {
+    const result = await pool.query(`
+      SELECT data, updated_at FROM weather_cache WHERE city_name = $1
+    `, [cityName]);
+    
+    if (result.rows.length > 0) {
+      return {
+        data: result.rows[0].data,
+        updatedAt: result.rows[0].updated_at
+      };
+    }
+    return null;
+  } catch (err) {
+    console.error(`Error getting cached data for ${cityName}:`, err.message);
+    return null;
+  }
+}
+
+// Fetch and cache data for all cities
 async function fetchAllCities() {
   console.log('Starting weather data fetch for all cities...');
   
   for (const city of cities) {
-    const weatherData = await fetchWeatherData(city);
-    await storeWeatherData(city.name, weatherData);
+    const data = await fetchWeatherFromAPI(city);
+    if (data) {
+      await cacheWeatherData(city.name, data);
+    }
     // Small delay to be nice to the API
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    await new Promise(resolve => setTimeout(resolve, 500));
   }
   
   console.log('Finished fetching weather data for all cities');
-}
-
-// Clean up old data (keep only 14 days)
-async function cleanupOldData() {
-  const cutoffDate = new Date();
-  cutoffDate.setDate(cutoffDate.getDate() - 14);
-  
-  const result = await pool.query(`
-    DELETE FROM weather_data 
-    WHERE fetch_date < $1
-  `, [cutoffDate.toISOString().split('T')[0]]);
-  
-  console.log(`Cleaned up ${result.rowCount} old weather records`);
 }
 
 // Middleware
@@ -148,136 +163,52 @@ app.get('/api/cities', (req, res) => {
 app.get('/api/weather/:city', async (req, res) => {
   const cityName = req.params.city;
   
-  const today = getLocalDate(0);
-  const yesterday = getLocalDate(-1);
-
-  try {
-    // ACTUAL data: What was recorded ON that day (fetch_date = target_date)
-    // This is the "actual" temperature because we fetched it on the same day
-    const actualToday = await pool.query(`
-      SELECT hour, temperature
-      FROM weather_data
-      WHERE city_name = $1 
-        AND target_date = $2
-        AND fetch_date = $2
-      ORDER BY hour
-    `, [cityName, today]);
-
-    const actualYesterday = await pool.query(`
-      SELECT hour, temperature
-      FROM weather_data
-      WHERE city_name = $1 
-        AND target_date = $2
-        AND fetch_date = $2
-      ORDER BY hour
-    `, [cityName, yesterday]);
-
-    // FORECAST data: What was PREDICTED for that day (fetch_date < target_date)
-    // Get the earliest prediction we have for each day
-    const forecastToday = await pool.query(`
-      SELECT DISTINCT ON (hour) hour, temperature, fetch_date
-      FROM weather_data
-      WHERE city_name = $1 
-        AND target_date = $2
-        AND fetch_date < $2
-      ORDER BY hour, fetch_date ASC
-    `, [cityName, today]);
-
-    const forecastYesterday = await pool.query(`
-      SELECT DISTINCT ON (hour) hour, temperature, fetch_date
-      FROM weather_data
-      WHERE city_name = $1 
-        AND target_date = $2
-        AND fetch_date < $2
-      ORDER BY hour, fetch_date ASC
-    `, [cityName, yesterday]);
-
-    // Build result arrays (24 hours)
-    const result = {
-      today: today,
-      yesterday: yesterday,
-      todayActual: Array(24).fill(null),
-      yesterdayActual: Array(24).fill(null),
-      todayForecast: Array(24).fill(null),
-      yesterdayForecast: Array(24).fill(null),
-    };
-
-    // Fill in actual data
-    for (const row of actualToday.rows) {
-      result.todayActual[row.hour] = parseFloat(row.temperature);
-    }
-    for (const row of actualYesterday.rows) {
-      result.yesterdayActual[row.hour] = parseFloat(row.temperature);
-    }
-
-    // Fill in forecast data
-    for (const row of forecastToday.rows) {
-      result.todayForecast[row.hour] = parseFloat(row.temperature);
-    }
-    for (const row of forecastYesterday.rows) {
-      result.yesterdayForecast[row.hour] = parseFloat(row.temperature);
-    }
-
-    res.json(result);
-  } catch (err) {
-    console.error('Error fetching weather data:', err);
-    res.status(500).json({ error: 'Database error' });
+  // Check if city exists
+  const city = cities.find(c => c.name === cityName);
+  if (!city) {
+    return res.status(404).json({ error: 'City not found' });
   }
-});
 
-// Debug endpoint - see what data we have
-app.get('/api/debug/:city', async (req, res) => {
-  const cityName = req.params.city;
+  // Try to get cached data first
+  let cached = await getCachedWeather(cityName);
   
-  try {
-    const data = await pool.query(`
-      SELECT fetch_date, target_date, COUNT(*) as hours, 
-             MIN(temperature) as min_temp, MAX(temperature) as max_temp
-      FROM weather_data
-      WHERE city_name = $1
-      GROUP BY fetch_date, target_date
-      ORDER BY fetch_date DESC, target_date
-    `, [cityName]);
-    
-    res.json({
-      city: cityName,
-      today: getLocalDate(0),
-      yesterday: getLocalDate(-1),
-      records: data.rows
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  // If no cache or cache is older than 1 hour, fetch fresh data
+  if (!cached || (Date.now() - new Date(cached.updatedAt).getTime()) > 3600000) {
+    console.log(`Fetching fresh data for ${cityName}...`);
+    const freshData = await fetchWeatherFromAPI(city);
+    if (freshData) {
+      await cacheWeatherData(cityName, freshData);
+      cached = { data: freshData, updatedAt: new Date() };
+    }
+  }
+
+  if (cached) {
+    res.json(cached.data);
+  } else {
+    res.status(500).json({ error: 'Could not fetch weather data' });
   }
 });
 
-// Manual trigger to fetch data (useful for testing)
+// Manual trigger to fetch data for all cities
 app.post('/api/fetch', async (req, res) => {
   try {
     await fetchAllCities();
-    await cleanupOldData();
-    res.json({ success: true, message: 'Weather data fetched successfully' });
+    res.json({ success: true, message: 'Weather data fetched for all cities' });
   } catch (err) {
     console.error('Error in manual fetch:', err);
     res.status(500).json({ error: 'Fetch failed' });
   }
 });
 
-// Get last fetch time
+// Get status
 app.get('/api/status', async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT MAX(created_at) as last_fetch 
-      FROM weather_data
-    `);
-    const countResult = await pool.query(`
-      SELECT COUNT(DISTINCT target_date) as days, COUNT(*) as total_records
-      FROM weather_data
+      SELECT city_name, updated_at FROM weather_cache ORDER BY city_name
     `);
     res.json({ 
-      lastFetch: result.rows[0]?.last_fetch || null,
-      cities: cities.length,
-      daysOfData: countResult.rows[0]?.days || 0,
-      totalRecords: countResult.rows[0]?.total_records || 0
+      cities: result.rows,
+      totalCities: cities.length
     });
   } catch (err) {
     res.status(500).json({ error: 'Database error' });
@@ -288,24 +219,15 @@ app.get('/api/status', async (req, res) => {
 async function start() {
   await initDB();
   
-  // Schedule fetch twice daily: 6:00 AM and 6:00 PM
-  cron.schedule('0 6,18 * * *', async () => {
+  // Schedule fetch every 6 hours
+  cron.schedule('0 */6 * * *', async () => {
     console.log('Running scheduled weather fetch...');
     await fetchAllCities();
-    await cleanupOldData();
   });
   
-  // Also fetch on startup if database is empty or no data for today
-  const today = getLocalDate(0);
-  const count = await pool.query(
-    'SELECT COUNT(*) FROM weather_data WHERE fetch_date = $1', 
-    [today]
-  );
-  
-  if (parseInt(count.rows[0].count) === 0) {
-    console.log('No data for today, fetching initial data...');
-    await fetchAllCities();
-  }
+  // Fetch on startup
+  console.log('Fetching initial weather data...');
+  await fetchAllCities();
   
   app.listen(PORT, () => {
     console.log(`Weather app running on port ${PORT}`);
