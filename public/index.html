@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Weather Comparison</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #eee;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        header h1 {
+            color: #4ecca3;
+            font-size: 2rem;
+            margin-bottom: 10px;
+        }
+
+        header p {
+            color: #888;
+            font-size: 0.95rem;
+        }
+
+        .controls {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 20px;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+        }
+
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        label {
+            color: #aaa;
+            font-size: 0.9rem;
+        }
+
+        select {
+            padding: 10px 20px;
+            font-size: 1rem;
+            border: none;
+            border-radius: 8px;
+            background: #0f3460;
+            color: #eee;
+            cursor: pointer;
+            outline: none;
+        }
+
+        select:hover {
+            background: #1a4a7a;
+        }
+
+        .refresh-btn {
+            padding: 10px 20px;
+            font-size: 0.9rem;
+            border: none;
+            border-radius: 8px;
+            background: #4ecca3;
+            color: #1a1a2e;
+            cursor: pointer;
+            font-weight: 600;
+            transition: background 0.2s;
+        }
+
+        .refresh-btn:hover {
+            background: #7ff5c9;
+        }
+
+        .chart-container {
+            background: #16213e;
+            border-radius: 16px;
+            padding: 30px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+
+        .legend-custom {
+            display: flex;
+            justify-content: center;
+            gap: 30px;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.85rem;
+        }
+
+        .legend-color {
+            width: 30px;
+            height: 4px;
+            border-radius: 2px;
+        }
+
+        .legend-color.dashed {
+            background: repeating-linear-gradient(
+                90deg,
+                currentColor 0px,
+                currentColor 6px,
+                transparent 6px,
+                transparent 12px
+            );
+            height: 3px;
+        }
+
+        .status-bar {
+            text-align: center;
+            margin-top: 20px;
+            color: #666;
+            font-size: 0.8rem;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 60px;
+            color: #666;
+            font-size: 1.1rem;
+        }
+
+        .error {
+            text-align: center;
+            padding: 40px;
+            color: #e94560;
+            background: rgba(233, 69, 96, 0.1);
+            border-radius: 12px;
+            margin-top: 20px;
+        }
+
+        @media (max-width: 600px) {
+            .chart-container {
+                padding: 15px;
+            }
+            
+            header h1 {
+                font-size: 1.5rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🌡️ Weather Comparison</h1>
+            <p>Compare actual vs predicted temperatures for today and yesterday</p>
+        </header>
+
+        <div class="controls">
+            <div class="control-group">
+                <label for="citySelect">City:</label>
+                <select id="citySelect">
+                    <option value="">Loading cities...</option>
+                </select>
+            </div>
+            <button class="refresh-btn" onclick="fetchData()">🔄 Refresh Data</button>
+        </div>
+
+        <div class="chart-container">
+            <canvas id="tempChart"></canvas>
+            
+            <div class="legend-custom">
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #4ecca3;"></div>
+                    <span>Today (Actual)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #e94560;"></div>
+                    <span>Yesterday (Actual)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color dashed" style="color: #4ecca3;"></div>
+                    <span>Today (Forecast)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color dashed" style="color: #e94560;"></div>
+                    <span>Yesterday (Forecast)</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="status-bar" id="statusBar">
+            Loading...
+        </div>
+    </div>
+
+    <script>
+        let chart = null;
+        let currentCity = 'Prague';
+
+        // Initialize
+        async function init() {
+            await loadCities();
+            await loadWeatherData();
+            await loadStatus();
+        }
+
+        // Load cities dropdown
+        async function loadCities() {
+            try {
+                const res = await fetch('/api/cities');
+                const cities = await res.json();
+                
+                const select = document.getElementById('citySelect');
+                select.innerHTML = cities.map(city => 
+                    `<option value="${city}" ${city === currentCity ? 'selected' : ''}>${city}</option>`
+                ).join('');
+                
+                select.addEventListener('change', (e) => {
+                    currentCity = e.target.value;
+                    loadWeatherData();
+                });
+            } catch (err) {
+                console.error('Error loading cities:', err);
+            }
+        }
+
+        // Load weather data for selected city
+        async function loadWeatherData() {
+            try {
+                const res = await fetch(`/api/weather/${currentCity}`);
+                const data = await res.json();
+                
+                renderChart(data);
+            } catch (err) {
+                console.error('Error loading weather data:', err);
+                document.querySelector('.chart-container').innerHTML = 
+                    '<div class="error">Error loading weather data. Try refreshing.</div>';
+            }
+        }
+
+        // Load status
+        async function loadStatus() {
+            try {
+                const res = await fetch('/api/status');
+                const status = await res.json();
+                
+                const lastFetch = status.lastFetch 
+                    ? new Date(status.lastFetch).toLocaleString() 
+                    : 'Never';
+                
+                document.getElementById('statusBar').textContent = 
+                    `Last data fetch: ${lastFetch} | Tracking ${status.cities} cities`;
+            } catch (err) {
+                document.getElementById('statusBar').textContent = 'Status unavailable';
+            }
+        }
+
+        // Fetch fresh data from API
+        async function fetchData() {
+            const btn = document.querySelector('.refresh-btn');
+            btn.textContent = '⏳ Fetching...';
+            btn.disabled = true;
+            
+            try {
+                await fetch('/api/fetch', { method: 'POST' });
+                await loadWeatherData();
+                await loadStatus();
+            } catch (err) {
+                console.error('Error fetching data:', err);
+                alert('Error fetching data. Try again.');
+            } finally {
+                btn.textContent = '🔄 Refresh Data';
+                btn.disabled = false;
+            }
+        }
+
+        // Render the chart
+        function renderChart(data) {
+            const ctx = document.getElementById('tempChart').getContext('2d');
+            
+            const hours = Array.from({length: 24}, (_, i) => `${i.toString().padStart(2, '0')}:00`);
+            
+            // Destroy existing chart
+            if (chart) {
+                chart.destroy();
+            }
+
+            chart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: hours,
+                    datasets: [
+                        {
+                            label: 'Today (Actual)',
+                            data: data.todayActual,
+                            borderColor: '#4ecca3',
+                            backgroundColor: 'rgba(78, 204, 163, 0.1)',
+                            borderWidth: 3,
+                            tension: 0.3,
+                            pointRadius: 2,
+                            pointHoverRadius: 6,
+                        },
+                        {
+                            label: 'Yesterday (Actual)',
+                            data: data.yesterdayActual,
+                            borderColor: '#e94560',
+                            backgroundColor: 'rgba(233, 69, 96, 0.1)',
+                            borderWidth: 3,
+                            tension: 0.3,
+                            pointRadius: 2,
+                            pointHoverRadius: 6,
+                        },
+                        {
+                            label: 'Today (Forecast)',
+                            data: data.todayForecast,
+                            borderColor: '#4ecca3',
+                            backgroundColor: 'transparent',
+                            borderWidth: 2,
+                            borderDash: [8, 4],
+                            tension: 0.3,
+                            pointRadius: 0,
+                            pointHoverRadius: 4,
+                        },
+                        {
+                            label: 'Yesterday (Forecast)',
+                            data: data.yesterdayForecast,
+                            borderColor: '#e94560',
+                            backgroundColor: 'transparent',
+                            borderWidth: 2,
+                            borderDash: [8, 4],
+                            tension: 0.3,
+                            pointRadius: 0,
+                            pointHoverRadius: 4,
+                        },
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: true,
+                    interaction: {
+                        mode: 'index',
+                        intersect: false,
+                    },
+                    plugins: {
+                        legend: {
+                            display: false, // Using custom legend
+                        },
+                        tooltip: {
+                            backgroundColor: '#16213e',
+                            titleColor: '#fff',
+                            bodyColor: '#aaa',
+                            borderColor: '#0f3460',
+                            borderWidth: 1,
+                            padding: 12,
+                            callbacks: {
+                                label: function(context) {
+                                    if (context.parsed.y !== null) {
+                                        return `${context.dataset.label}: ${context.parsed.y.toFixed(1)}°C`;
+                                    }
+                                    return null;
+                                }
+                            }
+                        },
+                        title: {
+                            display: true,
+                            text: `Temperature in ${currentCity}`,
+                            color: '#fff',
+                            font: {
+                                size: 18,
+                                weight: 'bold'
+                            },
+                            padding: {
+                                bottom: 20
+                            }
+                        },
+                        subtitle: {
+                            display: true,
+                            text: `Today: ${data.today} | Yesterday: ${data.yesterday}`,
+                            color: '#888',
+                            font: {
+                                size: 12
+                            },
+                            padding: {
+                                bottom: 10
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            grid: {
+                                color: 'rgba(255, 255, 255, 0.05)',
+                            },
+                            ticks: {
+                                color: '#888',
+                                maxTicksLimit: 12,
+                            }
+                        },
+                        y: {
+                            grid: {
+                                color: 'rgba(255, 255, 255, 0.05)',
+                            },
+                            ticks: {
+                                color: '#888',
+                                callback: function(value) {
+                                    return value + '°C';
+                                }
+                            },
+                            title: {
+                                display: true,
+                                text: 'Temperature (°C)',
+                                color: '#888'
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Start the app
+        init();
+    </script>
+</body>
+</html>
