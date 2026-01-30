@@ -48,9 +48,18 @@ async function fetchWeatherFromAPI(city) {
   // Get 8 days of history (for 7 days ago to yesterday) and 3 days forecast
   const url = `https://api.open-meteo.com/v1/forecast?latitude=${city.lat}&longitude=${city.lon}&hourly=temperature_2m&past_days=8&forecast_days=3&timezone=Europe%2FPrague`;
   
+  // Also fetch yesterday's forecast for today (previous run from ~11 AM yesterday)
+  // previous_day=1 means "forecast made 1 day ago"
+  const previousRunUrl = `https://previous-runs-api.open-meteo.com/v1/forecast?latitude=${city.lat}&longitude=${city.lon}&hourly=temperature_2m&forecast_days=3&past_days=0&previous_day=1&timezone=Europe%2FPrague`;
+  
   try {
-    const response = await fetch(url);
+    const [response, prevResponse] = await Promise.all([
+      fetch(url),
+      fetch(previousRunUrl)
+    ]);
+    
     const data = await response.json();
+    const prevData = await prevResponse.json();
     
     if (!data.hourly) {
       throw new Error('No hourly data in response');
@@ -79,12 +88,13 @@ async function fetchWeatherFromAPI(city) {
       twoDaysAgo: { date: days.twoDaysAgo, temps: Array(24).fill(null) },
       yesterday: { date: days.yesterday, temps: Array(24).fill(null) },
       today: { date: days.today, temps: Array(24).fill(null) },
+      todayForecast: { date: days.today, temps: Array(24).fill(null) }, // Yesterday's forecast for today
       tomorrow: { date: days.tomorrow, temps: Array(24).fill(null) },
       dayAfterTomorrow: { date: days.dayAfterTomorrow, temps: Array(24).fill(null) },
       updatedAt: new Date().toISOString()
     };
 
-    // Fill in temperatures
+    // Fill in temperatures from current data
     const times = data.hourly.time;
     const temps = data.hourly.temperature_2m;
 
@@ -93,11 +103,28 @@ async function fetchWeatherFromAPI(city) {
       const hour = parseInt(times[i].split('T')[1].split(':')[0]);
       const temp = temps[i];
 
-      // Match to the correct day
+      // Match to the correct day (skip todayForecast, that comes from prevData)
       for (const [key, dayData] of Object.entries(result)) {
-        if (key !== 'updatedAt' && dayData.date === dateStr) {
+        if (key !== 'updatedAt' && key !== 'todayForecast' && dayData.date === dateStr) {
           dayData.temps[hour] = temp;
           break;
+        }
+      }
+    }
+
+    // Fill in yesterday's forecast for today (from previous run API)
+    if (prevData && prevData.hourly) {
+      const prevTimes = prevData.hourly.time;
+      const prevTemps = prevData.hourly.temperature_2m;
+      
+      for (let i = 0; i < prevTimes.length; i++) {
+        const dateStr = prevTimes[i].split('T')[0];
+        const hour = parseInt(prevTimes[i].split('T')[1].split(':')[0]);
+        const temp = prevTemps[i];
+        
+        // Only get data for today's date
+        if (dateStr === days.today) {
+          result.todayForecast.temps[hour] = temp;
         }
       }
     }

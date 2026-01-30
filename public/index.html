@@ -164,6 +164,11 @@
             border-bottom-width: 5px;
         }
 
+        .legend-line.dashed-cyan {
+            border-color: #00CED1;
+            border-bottom-style: dashed;
+        }
+
         .legend-line.dashed-light-green {
             border-color: #90EE90;
             border-bottom-style: dashed;
@@ -260,6 +265,10 @@
                         <span>Today</span>
                     </div>
                     <div class="legend-item">
+                        <div class="legend-line dashed-cyan"></div>
+                        <span>Today Forecast</span>
+                    </div>
+                    <div class="legend-item">
                         <div class="legend-line dashed-light-green"></div>
                         <span>Tomorrow</span>
                     </div>
@@ -295,6 +304,10 @@
                     <div class="legend-item">
                         <div class="legend-line solid-green"></div>
                         <span>Today</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-line dashed-cyan"></div>
+                        <span>Today Forecast</span>
                     </div>
                     <div class="legend-item">
                         <div class="legend-line dashed-light-green"></div>
@@ -384,6 +397,7 @@
                 twoDaysAgo: { date: citiesData[0].twoDaysAgo.date, temps: [] },
                 yesterday: { date: citiesData[0].yesterday.date, temps: [] },
                 today: { date: citiesData[0].today.date, temps: [] },
+                todayForecast: { date: citiesData[0].today.date, temps: [] },
                 tomorrow: { date: citiesData[0].tomorrow.date, temps: [] },
                 dayAfterTomorrow: { date: citiesData[0].dayAfterTomorrow.date, temps: [] },
                 pastDaysAvg: { date: 'avg', temps: [] },
@@ -392,7 +406,7 @@
 
             // Calculate average for each hour
             for (let hour = 0; hour < 24; hour++) {
-                ['twoDaysAgo', 'yesterday', 'today', 'tomorrow', 'dayAfterTomorrow', 'pastDaysAvg'].forEach(day => {
+                ['twoDaysAgo', 'yesterday', 'today', 'todayForecast', 'tomorrow', 'dayAfterTomorrow', 'pastDaysAvg'].forEach(day => {
                     let sum = 0;
                     let count = 0;
                     citiesData.forEach(cityData => {
@@ -479,6 +493,7 @@
                 ...data.twoDaysAgo.temps,
                 ...data.yesterday.temps,
                 ...data.today.temps,
+                ...(data.todayForecast ? data.todayForecast.temps : []),
                 ...data.tomorrow.temps,
                 ...data.dayAfterTomorrow.temps,
                 ...(data.pastDaysAvg ? data.pastDaysAvg.temps : [])
@@ -513,6 +528,17 @@
             // Build annotations
             const annotations = {};
             if (showZeroLine) {
+                annotations.zeroLine = {
+                    type: 'line',
+                    yMin: 0,
+                    yMax: 0,
+                    borderColor: '#4a90d9',
+                    borderWidth: 3,
+                    borderDash: [],
+                    label: {
+                        display: false
+                    }
+                };
                 // Only add cold zone if there are actually negative temps
                 if (min < 0) {
                     annotations.coldZone = {
@@ -579,6 +605,19 @@
                             pointRadius: 2,
                             pointHoverRadius: 6,
                             order: 1,
+                        },
+                        {
+                            // Today Forecast - what yesterday predicted for today - cyan/teal dashed
+                            label: `Today Forecast`,
+                            data: data.todayForecast ? data.todayForecast.temps : Array(24).fill(null),
+                            borderColor: '#00CED1',
+                            backgroundColor: 'transparent',
+                            borderWidth: 3,
+                            borderDash: [8, 4],
+                            tension: 0.3,
+                            pointRadius: 0,
+                            pointHoverRadius: 5,
+                            order: 1.5,
                         },
                         {
                             // Tomorrow - dashed light green (longer dashes)
