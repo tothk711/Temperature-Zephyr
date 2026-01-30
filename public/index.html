@@ -528,17 +528,6 @@
             // Build annotations
             const annotations = {};
             if (showZeroLine) {
-                annotations.zeroLine = {
-                    type: 'line',
-                    yMin: 0,
-                    yMax: 0,
-                    borderColor: '#4a90d9',
-                    borderWidth: 3,
-                    borderDash: [],
-                    label: {
-                        display: false
-                    }
-                };
                 // Only add cold zone if there are actually negative temps
                 if (min < 0) {
                     annotations.coldZone = {
