@@ -400,6 +400,9 @@
             font-weight: 600;
             background: #16213e;
             white-space: nowrap;
+            cursor: help;
+            text-decoration: underline dotted rgba(255, 255, 255, 0.28);
+            text-underline-offset: 3px;
         }
 
         table.prep-table td.prep-note {
@@ -863,6 +866,18 @@
             HU: { capital: 'Budapest', container: 'huPrepContainer', legend: 'huPrepLegend' },
         };
 
+        // Hover explanations for each category (shown as native tooltips).
+        const PREP_TIPS = {
+            temp:      'Air temperature at this hour, in °C.',
+            tempNight: 'Air temperature around midnight, in °C.',
+            pressure:  'Air pressure near midday — Low / Normal / High (hPa). Falling pressure often signals more unsettled weather.',
+            wind:      'Strength of the strongest wind gusts that day — Light / Normal / Strong (km/h).',
+            weather:   'Overall sky condition for the day, from the Open-Meteo weather code (clear, cloudy, rain, storm…).',
+            clouds:    'Average cloud cover over the day — None to Very high (% of sky covered). Fewer clouds means more solar.',
+            solar:     'Total solar energy reaching the ground that day (shortwave radiation, MJ/m²). It drives photovoltaic (FVE) output: higher = more generation. About 25 is a sunny summer day; a few means dull or overcast.',
+            note:      'Automatic flags from the data — big temperature or cloud swings, storms, strong wind, frost, and so on.',
+        };
+
         // Pick a colour class for a day-over-day change.
         //   goodUp = true  -> an increase is good for solar (FVE)
         //   goodUp = false -> a decrease is good for solar (FVE)
@@ -913,8 +928,8 @@
 
             // Temperature rows — warmer than the previous day shades green
             // (warm days in this region tend to be sunnier -> more FVE).
-            function tempRow(label, key) {
-                let row = `<th class="row-label">${label}</th>`;
+            function tempRow(label, key, tip) {
+                let row = `<th class="row-label" title="${tip || ''}">${label}</th>`;
                 days.forEach((d, i) => {
                     const p = prevOf(i);
                     const cls = p ? swingClass(d.temp[key], p.temp[key], true, 2.5, 6) : '';
@@ -924,14 +939,14 @@
             }
 
             // Plain text rows (no colour).
-            function textRow(label, valueFn) {
-                let row = `<th class="row-label">${label}</th>`;
+            function textRow(label, valueFn, tip) {
+                let row = `<th class="row-label" title="${tip || ''}">${label}</th>`;
                 days.forEach(d => { row += prepCell(valueFn(d), '', ''); });
                 return `<tr>${row}</tr>`;
             }
 
             // Clouds — fewer clouds than the previous day shades green.
-            let cloudsRow = `<th class="row-label">☁️ Clouds</th>`;
+            let cloudsRow = `<th class="row-label" title="${PREP_TIPS.clouds}">☁️ Clouds</th>`;
             days.forEach((d, i) => {
                 const p = prevOf(i);
                 const cls = p ? swingClass(d.clouds.meanPct, p.clouds.meanPct, false, 12, 30) : '';
@@ -939,7 +954,7 @@
             });
 
             // Solar (FVE) — more daily radiation than the previous day shades green.
-            let solarRow = `<th class="row-label">☀️ Solar (FVE)</th>`;
+            let solarRow = `<th class="row-label" title="${PREP_TIPS.solar}">☀️ Solar (FVE)</th>`;
             days.forEach((d, i) => {
                 const p = prevOf(i);
                 const cls = p ? swingClass(d.solar.radSum, p.solar.radSum, true, 3, 8) : '';
@@ -947,7 +962,7 @@
             });
 
             // Notes.
-            let noteRow = `<th class="row-label">📝 Note</th>`;
+            let noteRow = `<th class="row-label" title="${PREP_TIPS.note}">📝 Note</th>`;
             days.forEach(d => {
                 const notes = (d.notes || []).slice(0, 3).join('; ');
                 noteRow += notes ? `<td class="prep-note">${notes}</td>` : '<td class="blank">—</td>';
@@ -958,12 +973,12 @@
                     <caption>${country} (${cfg.capital}) — 5-day overview</caption>
                     <thead><tr><th class="row-label">${country} (${cfg.capital})</th>${head}</tr></thead>
                     <tbody>
-                        ${tempRow('🌡️ Temp 8:00', 'h8')}
-                        ${tempRow('🌡️ Temp 16:00', 'h16')}
-                        ${tempRow('🌡️ Temp 0:00', 'h0')}
-                        ${textRow('🎚️ Pressure', d => d.pressure.class)}
-                        ${textRow('💨 Wind', d => d.wind.class)}
-                        ${textRow('⚡ Weather', d => d.weather.desc)}
+                        ${tempRow('🌡️ Temp 8:00', 'h8', PREP_TIPS.temp)}
+                        ${tempRow('🌡️ Temp 16:00', 'h16', PREP_TIPS.temp)}
+                        ${tempRow('🌡️ Temp 0:00', 'h0', PREP_TIPS.tempNight)}
+                        ${textRow('🎚️ Pressure', d => d.pressure.class, PREP_TIPS.pressure)}
+                        ${textRow('💨 Wind', d => d.wind.class, PREP_TIPS.wind)}
+                        ${textRow('⚡ Weather', d => d.weather.desc, PREP_TIPS.weather)}
                         <tr>${cloudsRow}</tr>
                         <tr>${solarRow}</tr>
                         <tr>${noteRow}</tr>
