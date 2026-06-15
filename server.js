@@ -499,9 +499,9 @@ function isStormCode(code) { return code === 95 || code === 96 || code === 99; }
 
 function classifyPressure(hPa) {
   if (hPa === null || hPa === undefined) return null;
-  if (hPa < 1005) return 'LOW';
-  if (hPa > 1020) return 'HIGH';
-  return 'NORMAL';
+  if (hPa < 1005) return 'Low';
+  if (hPa > 1020) return 'High';
+  return 'Normal';
 }
 function classifyWind(gustKmh) {
   if (gustKmh === null || gustKmh === undefined) return null;

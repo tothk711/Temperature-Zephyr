@@ -450,8 +450,8 @@
         <div class="tabs">
             <button class="tab-btn active" id="tabGraphs" onclick="showTab('graphs')">📊 Graphs</button>
             <button class="tab-btn" id="tabTable" onclick="showTab('table')">📋 Table</button>
-            <button class="tab-btn" id="tabCzPrep" onclick="showTab('czprep')">🇨🇿 CZ preparation</button>
-            <button class="tab-btn" id="tabHuPrep" onclick="showTab('huprep')">🇭🇺 HU preparation</button>
+            <button class="tab-btn" id="tabCzPrep" onclick="showTab('czprep')">CZ future</button>
+            <button class="tab-btn" id="tabHuPrep" onclick="showTab('huprep')">HU future</button>
         </div>
 
       <div id="graphsView">
@@ -931,7 +931,7 @@
             }
 
             // Clouds — fewer clouds than the previous day shades green.
-            let cloudsRow = `<th class="row-label">Clouds</th>`;
+            let cloudsRow = `<th class="row-label">☁️ Clouds</th>`;
             days.forEach((d, i) => {
                 const p = prevOf(i);
                 const cls = p ? swingClass(d.clouds.meanPct, p.clouds.meanPct, false, 12, 30) : '';
@@ -939,7 +939,7 @@
             });
 
             // Solar (FVE) — more daily radiation than the previous day shades green.
-            let solarRow = `<th class="row-label">Solar (FVE)</th>`;
+            let solarRow = `<th class="row-label">☀️ Solar (FVE)</th>`;
             days.forEach((d, i) => {
                 const p = prevOf(i);
                 const cls = p ? swingClass(d.solar.radSum, p.solar.radSum, true, 3, 8) : '';
@@ -947,7 +947,7 @@
             });
 
             // Notes.
-            let noteRow = `<th class="row-label">Note</th>`;
+            let noteRow = `<th class="row-label">📝 Note</th>`;
             days.forEach(d => {
                 const notes = (d.notes || []).slice(0, 3).join('; ');
                 noteRow += notes ? `<td class="prep-note">${notes}</td>` : '<td class="blank">—</td>';
@@ -955,15 +955,15 @@
 
             document.getElementById(cfg.container).innerHTML = `
                 <table class="prep-table">
-                    <caption>${country} (${cfg.capital}) — 5-day preparation overview</caption>
+                    <caption>${country} (${cfg.capital}) — 5-day overview</caption>
                     <thead><tr><th class="row-label">${country} (${cfg.capital})</th>${head}</tr></thead>
                     <tbody>
-                        ${tempRow('Temp 8:00', 'h8')}
-                        ${tempRow('Temp 16:00', 'h16')}
-                        ${tempRow('Temp 0:00', 'h0')}
-                        ${textRow('Pressure', d => d.pressure.class)}
-                        ${textRow('Wind', d => d.wind.class)}
-                        ${textRow('Weather', d => d.weather.desc)}
+                        ${tempRow('🌡️ Temp 8:00', 'h8')}
+                        ${tempRow('🌡️ Temp 16:00', 'h16')}
+                        ${tempRow('🌡️ Temp 0:00', 'h0')}
+                        ${textRow('🎚️ Pressure', d => d.pressure.class)}
+                        ${textRow('💨 Wind', d => d.wind.class)}
+                        ${textRow('⚡ Weather', d => d.weather.desc)}
                         <tr>${cloudsRow}</tr>
                         <tr>${solarRow}</tr>
                         <tr>${noteRow}</tr>
@@ -976,11 +976,8 @@
                 '<span class="swatch swing-vg"></span> much higher' +
                 '<span class="swatch swing-g"></span> higher' +
                 '<span class="swatch swing-r"></span> lower' +
-                '<span class="swatch swing-dr"></span> much lower &nbsp;' +
-                '(greener = better for solar: warmer / clearer / more radiation; redder = worse).' +
-                `<div class="note">Source: Open-Meteo for ${cfg.capital} (used as the ${country} proxy). ` +
-                'Solar = daily shortwave radiation in MJ/m². “—” means the value was not provided by the source ' +
-                `(nothing is invented). Generated ${when}.</div>`;
+                '<span class="swatch swing-dr"></span> much lower' +
+                `<div class="note">Source: Open-Meteo for ${cfg.capital} (used as the ${country} proxy). Generated ${when}.</div>`;
         }
 
         // ---- Tabs ---------------------------------------------------------
