@@ -36,11 +36,32 @@ async function initDB() {
   console.log('Database initialized');
 }
 
-// Get date string in YYYY-MM-DD format
+// Timezone used for all date math. The weather API returns timestamps in this
+// zone (see &timezone=Europe%2FPrague in the request URLs), so day boundaries
+// must be computed in the same zone — not in UTC.
+const APP_TIMEZONE = 'Europe/Prague';
+
+// Get date string in YYYY-MM-DD format for "today + offsetDays" in APP_TIMEZONE.
+//
+// Previously this used new Date().toISOString(), which is UTC. On a server
+// running in UTC, that made the day labels disagree with the Prague-local
+// timestamps returned by the API for the first 1-2 hours after local midnight,
+// shifting every series by a day and corrupting the charts during that window.
 function getDateString(offsetDays = 0) {
-  const date = new Date();
-  date.setDate(date.getDate() + offsetDays);
-  return date.toISOString().split('T')[0];
+  // Today's calendar date in the app timezone, as YYYY-MM-DD.
+  const todayLocal = new Intl.DateTimeFormat('en-CA', {
+    timeZone: APP_TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(new Date());
+
+  const [y, m, d] = todayLocal.split('-').map(Number);
+  // Anchor at noon UTC so adding/subtracting whole days can never cross a DST
+  // change or a midnight boundary into the wrong date.
+  const anchor = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+  anchor.setUTCDate(anchor.getUTCDate() + offsetDays);
+  return anchor.toISOString().split('T')[0];
 }
 
 // Fetch weather data from Open-Meteo for a city
@@ -63,13 +84,24 @@ async function fetchWeatherFromAPI(city) {
       })
     ]);
     
+    if (!response.ok) {
+      throw new Error(`API responded with HTTP ${response.status}`);
+    }
+
     const data = await response.json();
+
+    // Open-Meteo reports problems as { error: true, reason: "..." } with a 200,
+    // so check explicitly instead of assuming the payload is valid.
+    if (data.error) {
+      throw new Error(`API error: ${data.reason || 'unknown reason'}`);
+    }
+
     let prevData = null;
     if (prevResponse && prevResponse.ok) {
       prevData = await prevResponse.json();
     }
-    
-    if (!data.hourly) {
+
+    if (!data.hourly || !Array.isArray(data.hourly.time) || !Array.isArray(data.hourly.temperature_2m)) {
       throw new Error('No hourly data in response');
     }
 
@@ -207,8 +239,227 @@ async function fetchAllCities() {
     // Small delay to be nice to the API
     await new Promise(resolve => setTimeout(resolve, 500));
   }
-  
+
+  // The underlying data just changed, so drop any cached verification results
+  // (defined further down) to force a fresh check on the next request.
+  if (typeof verifyCache === 'object') {
+    Object.keys(verifyCache).forEach(k => delete verifyCache[k]);
+  }
+
   console.log('Finished fetching weather data for all cities');
+}
+
+// ---------------------------------------------------------------------------
+// Data verification
+//
+// Answers the question "is the data we downloaded actually correct?" with two
+// layers: cheap sanity checks on the values themselves, and an independent
+// cross-check of the historical days against Open-Meteo's ERA5 reanalysis
+// archive (a separate dataset from the forecast endpoint the app normally
+// uses). The pure logic lives in runDataChecks() so it can be unit tested
+// without any network access.
+// ---------------------------------------------------------------------------
+
+const VERIFY = {
+  MIN_TEMP: -45,          // °C, plausible lower bound for these cities
+  MAX_TEMP: 48,           // °C, plausible upper bound
+  MAX_HOURLY_JUMP: 12,    // °C between two adjacent hours
+  MAX_MISSING_RECENT: 4,  // allowed null hours across yesterday + today
+  GEO_MAX_KM: 30,         // configured coords must be within this of the named city
+  ERA5_MAE_LIMIT: 3.0,    // °C average error vs reanalysis before warning
+  ERA5_MAX_LIMIT: 6.0,    // °C worst-hour error vs reanalysis before warning
+  CACHE_MS: 6 * 3600000   // re-verify at most once per 6 hours per city
+};
+
+// Great-circle distance between two points in kilometres.
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const toRad = d => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 +
+            Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+// Pure verification logic (no network) so it is easy to test.
+//   city : { name, lat, lon }
+//   data : the stored weather object for that city
+//   geo  : { lat, lon, name } from the geocoder, or null if unavailable
+//   era5 : { 'YYYY-MM-DDTHH': temp } reanalysis map, or null if unavailable
+function runDataChecks(city, data, geo, era5) {
+  const checks = [];
+  const dayKeys = ['sevenDaysAgo', 'sixDaysAgo', 'fiveDaysAgo', 'fourDaysAgo',
+                   'threeDaysAgo', 'twoDaysAgo', 'yesterday', 'today',
+                   'tomorrow', 'dayAfterTomorrow'];
+
+  // 1) The coordinates really belong to the city we think they do.
+  if (geo && typeof geo.lat === 'number') {
+    const dist = haversineKm(city.lat, city.lon, geo.lat, geo.lon);
+    checks.push({
+      name: 'Coordinates match city',
+      pass: dist <= VERIFY.GEO_MAX_KM,
+      detail: `Configured point is ${dist.toFixed(1)} km from geocoded "${city.name}" (limit ${VERIFY.GEO_MAX_KM} km).`
+    });
+  } else {
+    checks.push({ name: 'Coordinates match city', pass: true, skipped: true,
+      detail: 'Geocoder unavailable — coordinate check skipped.' });
+  }
+
+  // 2) Every temperature is within a physically plausible range.
+  let outOfRange = 0, total = 0, gMin = Infinity, gMax = -Infinity;
+  for (const k of dayKeys) {
+    if (!data[k] || !Array.isArray(data[k].temps)) continue;
+    for (const t of data[k].temps) {
+      if (t === null || t === undefined) continue;
+      total++;
+      if (t < gMin) gMin = t;
+      if (t > gMax) gMax = t;
+      if (t < VERIFY.MIN_TEMP || t > VERIFY.MAX_TEMP) outOfRange++;
+    }
+  }
+  checks.push({
+    name: 'Temperatures in plausible range',
+    pass: outOfRange === 0 && total > 0,
+    detail: total === 0 ? 'No temperature values found.'
+      : `${total} values from ${gMin.toFixed(1)}°C to ${gMax.toFixed(1)}°C; ${outOfRange} out of range.`
+  });
+
+  // 3) The most important recent days are reasonably complete.
+  let missingRecent = 0;
+  for (const k of ['yesterday', 'today']) {
+    if (!data[k] || !Array.isArray(data[k].temps)) { missingRecent += 24; continue; }
+    missingRecent += data[k].temps.filter(t => t === null || t === undefined).length;
+  }
+  checks.push({
+    name: 'Recent days complete',
+    pass: missingRecent <= VERIFY.MAX_MISSING_RECENT,
+    detail: `${missingRecent} missing hour(s) across yesterday + today (limit ${VERIFY.MAX_MISSING_RECENT}).`
+  });
+
+  // 4) No impossible hour-to-hour temperature jumps (a sign of corruption).
+  let worstJump = 0, worstWhen = '';
+  for (const k of dayKeys) {
+    if (!data[k] || !Array.isArray(data[k].temps)) continue;
+    const t = data[k].temps;
+    for (let h = 1; h < t.length; h++) {
+      if (t[h] == null || t[h - 1] == null) continue;
+      const jump = Math.abs(t[h] - t[h - 1]);
+      if (jump > worstJump) { worstJump = jump; worstWhen = `${data[k].date} ${h - 1}:00→${h}:00`; }
+    }
+  }
+  checks.push({
+    name: 'No impossible hourly jumps',
+    pass: worstJump <= VERIFY.MAX_HOURLY_JUMP,
+    detail: worstWhen
+      ? `Largest change ${worstJump.toFixed(1)}°C (${worstWhen}); limit ${VERIFY.MAX_HOURLY_JUMP}°C.`
+      : 'Not enough data to evaluate.'
+  });
+
+  // 5) Historical days agree with the independent ERA5 reanalysis archive.
+  if (era5 && Object.keys(era5).length) {
+    let sumAbs = 0, n = 0, maxErr = 0, maxWhen = '';
+    for (const k of ['sevenDaysAgo', 'sixDaysAgo', 'fiveDaysAgo']) {
+      if (!data[k] || !Array.isArray(data[k].temps)) continue;
+      for (let h = 0; h < data[k].temps.length; h++) {
+        const ours = data[k].temps[h];
+        const ref = era5[`${data[k].date}T${String(h).padStart(2, '0')}`];
+        if (ours == null || ref == null) continue;
+        const err = Math.abs(ours - ref);
+        sumAbs += err; n++;
+        if (err > maxErr) { maxErr = err; maxWhen = `${data[k].date} ${h}:00`; }
+      }
+    }
+    if (n > 0) {
+      const mae = sumAbs / n;
+      checks.push({
+        name: 'Matches ERA5 reference archive',
+        pass: mae <= VERIFY.ERA5_MAE_LIMIT && maxErr <= VERIFY.ERA5_MAX_LIMIT,
+        detail: `${n} hours compared: avg diff ${mae.toFixed(2)}°C, worst ${maxErr.toFixed(1)}°C at ${maxWhen} (limits ${VERIFY.ERA5_MAE_LIMIT}/${VERIFY.ERA5_MAX_LIMIT}°C).`
+      });
+    } else {
+      checks.push({ name: 'Matches ERA5 reference archive', pass: true, skipped: true,
+        detail: 'No overlapping hours available to compare yet.' });
+    }
+  } else {
+    checks.push({ name: 'Matches ERA5 reference archive', pass: true, skipped: true,
+      detail: 'Reference archive unavailable — cross-check skipped.' });
+  }
+
+  const hardFail = checks.some(c => c.pass === false && !c.skipped);
+  return {
+    city: city.name,
+    status: hardFail ? 'warning' : 'ok',
+    checkedAt: new Date().toISOString(),
+    checks
+  };
+}
+
+// In-memory cache of verification results (verification is comparatively heavy).
+const verifyCache = {};
+
+// Confirm the configured coordinates resolve to the named city.
+async function fetchGeo(city) {
+  try {
+    const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city.name)}&count=1&language=en&format=json`;
+    const r = await fetch(url);
+    if (!r.ok) return null;
+    const j = await r.json();
+    if (j && Array.isArray(j.results) && j.results.length) {
+      return { lat: j.results[0].latitude, lon: j.results[0].longitude, name: j.results[0].name };
+    }
+  } catch (e) {
+    console.log(`Geocode failed for ${city.name}:`, e.message);
+  }
+  return null;
+}
+
+// Fetch the ERA5 reanalysis for the oldest historical days, keyed by hour.
+async function fetchEra5(city) {
+  try {
+    const start = getDateString(-7);
+    const end = getDateString(-5);
+    const url = `https://archive-api.open-meteo.com/v1/archive?latitude=${city.lat}&longitude=${city.lon}&start_date=${start}&end_date=${end}&hourly=temperature_2m&timezone=Europe%2FPrague`;
+    const r = await fetch(url);
+    if (!r.ok) return null;
+    const j = await r.json();
+    if (!j.hourly || !Array.isArray(j.hourly.time)) return null;
+    const map = {};
+    for (let i = 0; i < j.hourly.time.length; i++) {
+      // "2026-06-08T00:00" -> key "2026-06-08T00"
+      map[j.hourly.time[i].slice(0, 13)] = j.hourly.temperature_2m[i];
+    }
+    return map;
+  } catch (e) {
+    console.log(`ERA5 fetch failed for ${city.name}:`, e.message);
+    return null;
+  }
+}
+
+// Verify one city, using cached results when fresh enough.
+async function verifyCity(city) {
+  const cached = verifyCache[city.name];
+  if (cached && (Date.now() - cached.ts) < VERIFY.CACHE_MS) return cached.result;
+
+  let weather = await getCachedWeather(city.name);
+  if (!weather) {
+    const fresh = await fetchWeatherFromAPI(city);
+    if (fresh) {
+      await cacheWeatherData(city.name, fresh);
+      weather = { data: fresh };
+    }
+  }
+  if (!weather) {
+    return {
+      city: city.name, status: 'warning', checkedAt: new Date().toISOString(),
+      checks: [{ name: 'Data available', pass: false, detail: 'No weather data to verify.' }]
+    };
+  }
+
+  const [geo, era5] = await Promise.all([fetchGeo(city), fetchEra5(city)]);
+  const result = runDataChecks(city, weather.data, geo, era5);
+  verifyCache[city.name] = { result, ts: Date.now() };
+  return result;
 }
 
 // Middleware
@@ -278,6 +529,20 @@ app.get('/api/status', async (req, res) => {
   }
 });
 
+// Verify the downloaded data for a city
+app.get('/api/verify/:city', async (req, res) => {
+  const city = cities.find(c => c.name === req.params.city);
+  if (!city) {
+    return res.status(404).json({ error: 'City not found' });
+  }
+  try {
+    res.json(await verifyCity(city));
+  } catch (err) {
+    console.error(`Verify failed for ${req.params.city}:`, err.message);
+    res.status(500).json({ error: 'Verification failed' });
+  }
+});
+
 // Initialize and start
 async function start() {
   await initDB();
@@ -297,4 +562,10 @@ async function start() {
   });
 }
 
-start().catch(console.error);
+// Start only when run directly (`node server.js`); when required by a test the
+// pure helpers below can be exercised without opening a DB connection or port.
+if (require.main === module) {
+  start().catch(console.error);
+}
+
+module.exports = { getDateString, haversineKm, runDataChecks, APP_TIMEZONE, VERIFY };

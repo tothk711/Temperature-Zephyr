@@ -224,6 +224,139 @@
                 height: 300px;
             }
         }
+
+        /* View tabs */
+        .tabs {
+            display: flex;
+            justify-content: center;
+            gap: 8px;
+            margin-bottom: 20px;
+        }
+
+        .tab-btn {
+            padding: 10px 22px;
+            font-size: 0.95rem;
+            border: none;
+            border-radius: 8px;
+            background: #0f3460;
+            color: #cfd8e3;
+            cursor: pointer;
+            font-weight: 600;
+            transition: background 0.2s, color 0.2s;
+        }
+
+        .tab-btn:hover { background: #1a4a7a; }
+        .tab-btn.active { background: #4ecca3; color: #1a1a2e; }
+
+        /* Verification badge */
+        .verify-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-size: 0.72rem;
+            font-weight: 600;
+            cursor: pointer;
+            white-space: nowrap;
+            border: 1px solid transparent;
+            user-select: none;
+        }
+
+        .verify-badge.checking { background: rgba(150,150,150,0.15); color: #aaa; border-color: rgba(150,150,150,0.3); }
+        .verify-badge.ok { background: rgba(78,204,163,0.15); color: #4ecca3; border-color: rgba(78,204,163,0.4); }
+        .verify-badge.warning { background: rgba(233,180,76,0.15); color: #e9b44c; border-color: rgba(233,180,76,0.45); }
+        .verify-badge.error { background: rgba(150,150,150,0.12); color: #999; border-color: rgba(150,150,150,0.25); }
+
+        .verify-details {
+            margin-top: 10px;
+            font-size: 0.72rem;
+            color: #9fb0c3;
+            line-height: 1.5;
+            text-align: left;
+            display: none;
+        }
+
+        .verify-details.show { display: block; }
+        .verify-details .vd-pass { color: #4ecca3; }
+        .verify-details .vd-fail { color: #e9b44c; }
+        .verify-details .vd-skip { color: #888; }
+
+        /* Data table */
+        .table-panel {
+            background: #16213e;
+            border-radius: 16px;
+            padding: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            max-width: 1100px;
+            margin: 0 auto;
+        }
+
+        .table-controls {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+        }
+
+        .table-controls label { color: #aaa; font-size: 0.9rem; }
+
+        .table-controls select {
+            padding: 8px 16px;
+            font-size: 0.95rem;
+            border: none;
+            border-radius: 8px;
+            background: #0f3460;
+            color: #eee;
+            cursor: pointer;
+            outline: none;
+        }
+
+        .table-scroll { overflow-x: auto; }
+
+        table.data-table {
+            border-collapse: collapse;
+            width: 100%;
+            font-size: 0.85rem;
+            min-width: 640px;
+        }
+
+        table.data-table caption {
+            text-align: left;
+            color: #fff;
+            font-weight: 700;
+            font-size: 1rem;
+            margin-bottom: 12px;
+        }
+
+        table.data-table th,
+        table.data-table td {
+            padding: 8px 10px;
+            text-align: center;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+        }
+
+        table.data-table thead th {
+            color: #4ecca3;
+            font-weight: 600;
+            border-bottom: 2px solid rgba(78, 204, 163, 0.3);
+        }
+
+        table.data-table th.time-col,
+        table.data-table td.time-col {
+            text-align: left;
+            color: #cfd8e3;
+            font-weight: 600;
+            position: sticky;
+            left: 0;
+            background: #16213e;
+        }
+
+        table.data-table td.today-col { color: #4ecca3; font-weight: 600; }
+        table.data-table tbody tr:hover td { background: rgba(255, 255, 255, 0.03); }
+        table.data-table td.na { color: #555; }
     </style>
 </head>
 <body>
@@ -237,13 +370,21 @@
             <button class="refresh-btn" onclick="refreshData()">🔄 Refresh All Data</button>
         </div>
 
+        <div class="tabs">
+            <button class="tab-btn active" id="tabGraphs" onclick="showTab('graphs')">📊 Graphs</button>
+            <button class="tab-btn" id="tabTable" onclick="showTab('table')">📋 Table</button>
+        </div>
+
+      <div id="graphsView">
         <div class="graphs-container">
             <!-- Left Graph - Czech Cities -->
             <div class="chart-panel">
                 <div class="chart-header">
                     <label for="leftCitySelect">City:</label>
                     <select id="leftCitySelect"></select>
+                    <span class="verify-badge checking" id="leftVerify" onclick="toggleDetails('left')">⏳ Checking…</span>
                 </div>
+                <div class="verify-details" id="leftVerifyDetails"></div>
                 <div class="chart-wrapper">
                     <canvas id="leftChart"></canvas>
                 </div>
@@ -284,7 +425,9 @@
                 <div class="chart-header">
                     <label for="rightCitySelect">City:</label>
                     <select id="rightCitySelect"></select>
+                    <span class="verify-badge checking" id="rightVerify" onclick="toggleDetails('right')">⏳ Checking…</span>
                 </div>
+                <div class="verify-details" id="rightVerifyDetails"></div>
                 <div class="chart-wrapper">
                     <canvas id="rightChart"></canvas>
                 </div>
@@ -320,6 +463,21 @@
                 </div>
             </div>
         </div>
+      </div><!-- /graphsView -->
+
+      <div id="tableView" style="display:none;">
+        <div class="table-panel">
+            <div class="table-controls">
+                <label for="tableCitySelect">City:</label>
+                <select id="tableCitySelect"></select>
+                <span class="verify-badge checking" id="tableVerify" onclick="toggleDetails('table')">⏳ Checking…</span>
+            </div>
+            <div class="verify-details" id="tableVerifyDetails"></div>
+            <div class="table-scroll">
+                <div id="tableContainer"></div>
+            </div>
+        </div>
+      </div><!-- /tableView -->
 
         <div class="status-bar" id="statusBar">
             Loading...
@@ -350,6 +508,7 @@
         async function init() {
             updateTodayDate();
             setupDropdowns();
+            setupTable();
             await Promise.all([
                 loadWeatherData('left', leftCity),
                 loadWeatherData('right', rightCity)
@@ -422,36 +581,193 @@
             return result;
         }
 
+        // Fetch a city's weather data (handles the Czechia average + caching).
+        // Shared by the graphs and the table so they always agree.
+        async function fetchCityData(cityName) {
+            if (cityName === 'Czechia') {
+                const citiesData = await Promise.all(
+                    czechCitiesForAverage.map(async (city) => {
+                        if (cityDataCache[city]) return cityDataCache[city];
+                        const res = await fetch(`/api/weather/${encodeURIComponent(city)}`);
+                        const cityData = await res.json();
+                        cityDataCache[city] = cityData;
+                        return cityData;
+                    })
+                );
+                return calculateCzechiaAverage(citiesData);
+            }
+            if (cityDataCache[cityName]) return cityDataCache[cityName];
+            const res = await fetch(`/api/weather/${encodeURIComponent(cityName)}`);
+            const data = await res.json();
+            cityDataCache[cityName] = data;
+            return data;
+        }
+
         // Load weather data for a chart
         async function loadWeatherData(side, cityName) {
             try {
-                let data;
-
-                if (cityName === 'Czechia') {
-                    // Fetch all Czech cities and calculate average
-                    const citiesData = await Promise.all(
-                        czechCitiesForAverage.map(async (city) => {
-                            if (cityDataCache[city]) {
-                                return cityDataCache[city];
-                            }
-                            const res = await fetch(`/api/weather/${city}`);
-                            const cityData = await res.json();
-                            cityDataCache[city] = cityData;
-                            return cityData;
-                        })
-                    );
-                    data = calculateCzechiaAverage(citiesData);
-                } else {
-                    const res = await fetch(`/api/weather/${cityName}`);
-                    data = await res.json();
-                    cityDataCache[cityName] = data;
-                }
-                
+                const data = await fetchCityData(cityName);
                 renderChart(side, cityName, data);
                 updateStatus(data.updatedAt);
+                loadVerification(side, cityName); // runs in the background
             } catch (err) {
                 console.error(`Error loading weather data for ${cityName}:`, err);
             }
+        }
+
+        // ---- Data verification badge --------------------------------------
+
+        function badgeEls(side) {
+            const map = {
+                left:  ['leftVerify', 'leftVerifyDetails'],
+                right: ['rightVerify', 'rightVerifyDetails'],
+                table: ['tableVerify', 'tableVerifyDetails'],
+            };
+            const [b, d] = map[side];
+            return { badge: document.getElementById(b), details: document.getElementById(d) };
+        }
+
+        function setBadge(side, state, text, detailsHtml, titleText) {
+            const { badge, details } = badgeEls(side);
+            if (!badge) return;
+            badge.className = `verify-badge ${state}`;
+            badge.textContent = text;
+            badge.title = titleText || '';
+            if (details) {
+                details.innerHTML = detailsHtml || '';
+                details.classList.remove('show');
+            }
+        }
+
+        function toggleDetails(side) {
+            const { details } = badgeEls(side);
+            if (details && details.innerHTML.trim()) details.classList.toggle('show');
+        }
+
+        // Ask the server to verify a city's data, then update its badge.
+        async function loadVerification(side, cityName) {
+            setBadge(side, 'checking', '⏳ Checking data…', '', '');
+            try {
+                let results;
+                if (cityName === 'Czechia') {
+                    results = await Promise.all(czechCitiesForAverage.map(c =>
+                        fetch(`/api/verify/${encodeURIComponent(c)}`).then(r => r.json())));
+                } else {
+                    results = [await fetch(`/api/verify/${encodeURIComponent(cityName)}`).then(r => r.json())];
+                }
+
+                const valid = results.filter(r => r && Array.isArray(r.checks));
+                if (!valid.length) {
+                    setBadge(side, 'error', 'Check unavailable', '', 'Could not verify data right now');
+                    return;
+                }
+
+                const anyWarn = valid.some(r => r.status === 'warning');
+
+                let html = '';
+                valid.forEach(r => {
+                    if (valid.length > 1) {
+                        html += `<div class="vd-row" style="color:#cfd8e3;font-weight:600;margin-top:6px;">${r.city}</div>`;
+                    }
+                    (r.checks || []).forEach(c => {
+                        const cls = c.skipped ? 'vd-skip' : (c.pass ? 'vd-pass' : 'vd-fail');
+                        const icon = c.skipped ? '–' : (c.pass ? '✓' : '⚠');
+                        html += `<div class="vd-row ${cls}">${icon} ${c.name}: ${c.detail}</div>`;
+                    });
+                });
+                const when = valid[0].checkedAt ? new Date(valid[0].checkedAt).toLocaleString() : '';
+                html += `<div class="vd-row vd-skip" style="margin-top:6px;">Checked ${when}. Click the badge to hide.</div>`;
+
+                const label = anyWarn ? '⚠ Check flagged issues' : '✓ Data checked';
+                const title = anyWarn
+                    ? 'Some checks need attention — click for details'
+                    : 'All data checks passed — click for details';
+                setBadge(side, anyWarn ? 'warning' : 'ok', label, html, title);
+            } catch (e) {
+                console.error('Verification failed:', e);
+                setBadge(side, 'error', 'Check unavailable', '', 'Could not verify data right now');
+            }
+        }
+
+        // ---- Table view ---------------------------------------------------
+
+        const tableCities = ['Czechia', ...czechCitiesForAverage, ...otherCities];
+        let tableCity = 'Czechia';
+        const TABLE_HOURS = [0, 4, 8, 12, 16, 20];
+
+        function fmtTemp(v) {
+            return (v === null || v === undefined || Number.isNaN(v)) ? '—' : `${v.toFixed(1)}°`;
+        }
+
+        function setupTable() {
+            const sel = document.getElementById('tableCitySelect');
+            sel.innerHTML = tableCities.map(c =>
+                `<option value="${c}" ${c === tableCity ? 'selected' : ''}>${c === 'Czechia' ? 'Czechia (Avg)' : c}</option>`
+            ).join('');
+            sel.addEventListener('change', (e) => {
+                tableCity = e.target.value;
+                loadTable();
+            });
+        }
+
+        function renderTable(cityName, data) {
+            const series = [
+                { key: 'pastDaysAvg',      label: 'Past Avg (3–7d)' },
+                { key: 'twoDaysAgo',       label: '2 Days Ago' },
+                { key: 'yesterday',        label: 'Yesterday' },
+                { key: 'today',            label: 'Today', highlight: true },
+                { key: 'todayForecast',    label: 'Today Forecast' },
+                { key: 'tomorrow',         label: 'Tomorrow' },
+                { key: 'dayAfterTomorrow', label: 'Day After' },
+            ];
+            const displayName = cityName === 'Czechia' ? 'Czechia (Average)' : cityName;
+
+            let html = `<table class="data-table"><caption>Temperatures in ${displayName} — every 4 hours (°C, CET/CEST)</caption>`;
+            html += `<thead><tr><th class="time-col">Time</th>`;
+            series.forEach(s => {
+                const d = (data[s.key] && data[s.key].date && data[s.key].date !== 'avg')
+                    ? `<br><span style="font-weight:400;color:#7a8a9a;font-size:0.7rem;">${data[s.key].date}</span>` : '';
+                html += `<th>${s.label}${d}</th>`;
+            });
+            html += `</tr></thead><tbody>`;
+
+            TABLE_HOURS.forEach(h => {
+                html += `<tr><td class="time-col">${String(h).padStart(2, '0')}:00</td>`;
+                series.forEach(s => {
+                    const arr = (data[s.key] && data[s.key].temps) ? data[s.key].temps : [];
+                    const v = arr[h];
+                    const na = (v === null || v === undefined);
+                    const cls = `${s.highlight ? 'today-col' : ''}${na ? ' na' : ''}`.trim();
+                    html += `<td class="${cls}">${fmtTemp(v)}</td>`;
+                });
+                html += `</tr>`;
+            });
+            html += `</tbody></table>`;
+            document.getElementById('tableContainer').innerHTML = html;
+        }
+
+        async function loadTable() {
+            try {
+                const data = await fetchCityData(tableCity);
+                renderTable(tableCity, data);
+                updateStatus(data.updatedAt);
+                loadVerification('table', tableCity);
+            } catch (e) {
+                console.error('Error loading table:', e);
+                document.getElementById('tableContainer').innerHTML =
+                    '<div class="error">Could not load table data.</div>';
+            }
+        }
+
+        // ---- Tabs ---------------------------------------------------------
+
+        function showTab(tab) {
+            const isTable = tab === 'table';
+            document.getElementById('graphsView').style.display = isTable ? 'none' : '';
+            document.getElementById('tableView').style.display = isTable ? '' : 'none';
+            document.getElementById('tabGraphs').classList.toggle('active', !isTable);
+            document.getElementById('tabTable').classList.toggle('active', isTable);
+            if (isTable) loadTable();
         }
 
         // Update status bar
@@ -478,6 +794,10 @@
                     loadWeatherData('left', leftCity),
                     loadWeatherData('right', rightCity)
                 ]);
+                // Refresh the table too if it is the active view.
+                if (document.getElementById('tableView').style.display !== 'none') {
+                    loadTable();
+                }
             } catch (err) {
                 console.error('Error refreshing data:', err);
                 alert('Error refreshing data. Try again.');
