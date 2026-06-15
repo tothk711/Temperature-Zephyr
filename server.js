@@ -462,6 +462,197 @@ async function verifyCity(city) {
   return result;
 }
 
+// ---------------------------------------------------------------------------
+// Country preparation overview (CZ / HU)
+//
+// A 5-day "what's coming" table for a capital city (used as the country proxy:
+// Prague = CZ, Budapest = HU). Shows temperatures at 08:00/16:00/00:00 plus
+// pressure, wind, weather, cloud cover and solar (FVE) potential, with
+// auto-generated notes. Every value comes straight from Open-Meteo; anything
+// the API does not return is left null and rendered blank — never invented.
+// The pure functions (parsePreparation, buildNotes, classify*) are exported so
+// they can be unit tested without any network access.
+// ---------------------------------------------------------------------------
+
+const PREP_TZ = { Prague: 'Europe/Prague', Budapest: 'Europe/Budapest' };
+const PREP_LABELS = ['Today', 'Tomorrow', 'D+2', 'D+3', 'D+4'];
+
+// WMO weather code -> short human description.
+const WMO_DESC = {
+  0: 'Clear', 1: 'Mostly clear', 2: 'Partly cloudy', 3: 'Overcast',
+  45: 'Fog', 48: 'Rime fog',
+  51: 'Light drizzle', 53: 'Drizzle', 55: 'Heavy drizzle',
+  56: 'Freezing drizzle', 57: 'Freezing drizzle',
+  61: 'Light rain', 63: 'Rain', 65: 'Heavy rain',
+  66: 'Freezing rain', 67: 'Freezing rain',
+  71: 'Light snow', 73: 'Snow', 75: 'Heavy snow', 77: 'Snow grains',
+  80: 'Rain showers', 81: 'Rain showers', 82: 'Violent showers',
+  85: 'Snow showers', 86: 'Snow showers',
+  95: 'Thunderstorm', 96: 'Thunderstorm + hail', 99: 'Thunderstorm + hail'
+};
+
+function describeWeather(code) {
+  if (code === null || code === undefined) return null;
+  return WMO_DESC[code] || `Code ${code}`;
+}
+function isStormCode(code) { return code === 95 || code === 96 || code === 99; }
+
+function classifyPressure(hPa) {
+  if (hPa === null || hPa === undefined) return null;
+  if (hPa < 1005) return 'LOW';
+  if (hPa > 1020) return 'HIGH';
+  return 'NORMAL';
+}
+function classifyWind(gustKmh) {
+  if (gustKmh === null || gustKmh === undefined) return null;
+  if (gustKmh >= 50) return 'Strong';
+  if (gustKmh >= 20) return 'Normal';
+  return 'Light';
+}
+function classifyClouds(pct) {
+  if (pct === null || pct === undefined) return null;
+  if (pct < 10) return 'None';
+  if (pct < 35) return 'Low';
+  if (pct < 65) return 'Medium';
+  if (pct < 85) return 'High';
+  return 'Very high';
+}
+
+// Build the per-day structure from a raw Open-Meteo response. Pure + testable.
+// Any value not present in the response becomes null.
+function parsePreparation(raw) {
+  if (!raw || !raw.daily || !Array.isArray(raw.daily.time)) return [];
+  const h = raw.hourly || {};
+  const hTime = Array.isArray(h.time) ? h.time : [];
+  const idxByTime = {};
+  for (let i = 0; i < hTime.length; i++) idxByTime[hTime[i]] = i;
+
+  const numAt = (arr, t) => {
+    const i = idxByTime[t];
+    if (i === undefined || !Array.isArray(arr)) return null;
+    const v = arr[i];
+    return (typeof v === 'number' && !Number.isNaN(v)) ? v : null;
+  };
+  const dailyNum = (arr, di) => {
+    if (!Array.isArray(arr)) return null;
+    const v = arr[di];
+    return (typeof v === 'number' && !Number.isNaN(v)) ? v : null;
+  };
+
+  const days = [];
+  const nDays = Math.min(raw.daily.time.length, 5);
+  for (let di = 0; di < nDays; di++) {
+    const date = raw.daily.time[di];
+
+    // Mean cloud cover across that day's hours (only counting real values).
+    let cloudSum = 0, cloudN = 0;
+    if (Array.isArray(h.cloud_cover)) {
+      for (let i = 0; i < hTime.length; i++) {
+        if (typeof hTime[i] === 'string' && hTime[i].slice(0, 10) === date) {
+          const v = h.cloud_cover[i];
+          if (typeof v === 'number' && !Number.isNaN(v)) { cloudSum += v; cloudN++; }
+        }
+      }
+    }
+    const cloudMean = cloudN > 0 ? cloudSum / cloudN : null;
+
+    let wCode = null;
+    if (Array.isArray(raw.daily.weather_code) && typeof raw.daily.weather_code[di] === 'number') {
+      wCode = raw.daily.weather_code[di];
+    }
+    const pressure = numAt(h.pressure_msl, `${date}T12:00`);
+    const gustMax = dailyNum(raw.daily.wind_gusts_10m_max, di);
+
+    days.push({
+      label: PREP_LABELS[di] || `D+${di}`,
+      date,
+      temp: {
+        h8: numAt(h.temperature_2m, `${date}T08:00`),
+        h16: numAt(h.temperature_2m, `${date}T16:00`),
+        h0: numAt(h.temperature_2m, `${date}T00:00`)
+      },
+      tempMax: dailyNum(raw.daily.temperature_2m_max, di),
+      tempMin: dailyNum(raw.daily.temperature_2m_min, di),
+      pressure: { value: pressure, class: classifyPressure(pressure) },
+      wind: { gustMax, class: classifyWind(gustMax) },
+      weather: { code: wCode, desc: describeWeather(wCode) },
+      clouds: { meanPct: cloudMean === null ? null : Math.round(cloudMean), class: classifyClouds(cloudMean) },
+      solar: { radSum: dailyNum(raw.daily.shortwave_radiation_sum, di) },
+      precipSum: dailyNum(raw.daily.precipitation_sum, di),
+      notes: []
+    });
+  }
+  return days;
+}
+
+// ~11 simple IF/THEN rules — no AI needed at runtime. Pure + testable.
+// prev may be null for the first day.
+function buildNotes(prev, day) {
+  const notes = [];
+  const r = Math.round;
+  const num = v => (typeof v === 'number' && !Number.isNaN(v));
+
+  if (prev) {
+    if (num(day.tempMax) && num(prev.tempMax)) {
+      const d = day.tempMax - prev.tempMax;
+      if (d >= 6) notes.push(`Much warmer (+${r(d)}°C)`);
+      else if (d <= -6) notes.push(`Sharp cooldown (${r(d)}°C)`);
+    }
+    if (num(day.clouds.meanPct) && num(prev.clouds.meanPct)) {
+      const d = day.clouds.meanPct - prev.clouds.meanPct;
+      if (d >= 35) notes.push('Clouding over — solar drops');
+      else if (d <= -35) notes.push('Clearing up — solar boost');
+    }
+    if (num(day.pressure.value) && num(prev.pressure.value)) {
+      if (day.pressure.value - prev.pressure.value <= -8) notes.push('Pressure dropping — unsettled');
+    }
+    if (num(day.solar.radSum) && num(prev.solar.radSum) && prev.solar.radSum > 0) {
+      const rel = (day.solar.radSum - prev.solar.radSum) / prev.solar.radSum;
+      if (rel >= 0.3) notes.push('Stronger solar day');
+      else if (rel <= -0.3) notes.push('Weaker solar day');
+    }
+  }
+  if (isStormCode(day.weather.code)) notes.push('Storm risk');
+  if (num(day.precipSum) && day.precipSum >= 15) notes.push(`Heavy rain (${r(day.precipSum)} mm)`);
+  if (num(day.wind.gustMax) && day.wind.gustMax >= 60) notes.push(`Strong winds (${r(day.wind.gustMax)} km/h)`);
+  if (num(day.tempMax) && day.tempMax >= 30) notes.push(`Hot day (${r(day.tempMax)}°C)`);
+  if (num(day.tempMin) && day.tempMin <= 0) notes.push(`Frost (${r(day.tempMin)}°C)`);
+  return notes;
+}
+
+// In-memory cache for the (heavier) preparation queries.
+const prepCache = {};
+const PREP_CACHE_MS = 60 * 60 * 1000; // 1 hour
+
+async function fetchPreparation(city) {
+  const cached = prepCache[city.name];
+  if (cached && (Date.now() - cached.ts) < PREP_CACHE_MS) return cached.result;
+
+  const tz = PREP_TZ[city.name] || APP_TIMEZONE;
+  const hourly = 'temperature_2m,cloud_cover,pressure_msl,wind_gusts_10m,shortwave_radiation,weather_code';
+  const daily = 'weather_code,temperature_2m_max,temperature_2m_min,shortwave_radiation_sum,precipitation_sum,wind_gusts_10m_max,sunshine_duration';
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${city.lat}&longitude=${city.lon}&hourly=${hourly}&daily=${daily}&forecast_days=5&timezone=${encodeURIComponent(tz)}&wind_speed_unit=kmh`;
+
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`Open-Meteo HTTP ${r.status}`);
+  const raw = await r.json();
+  if (raw.error) throw new Error(`Open-Meteo: ${raw.reason || 'error'}`);
+
+  const days = parsePreparation(raw);
+  for (let i = 0; i < days.length; i++) {
+    days[i].notes = buildNotes(i > 0 ? days[i - 1] : null, days[i]);
+  }
+
+  const result = {
+    city: city.name,
+    generatedAt: new Date().toISOString(),
+    units: { temp: '°C', pressure: 'hPa', wind: 'km/h gusts', clouds: '%', solar: 'MJ/m² (daily)' },
+    days
+  };
+  prepCache[city.name] = { result, ts: Date.now() };
+  return result;
+}
+
 // Middleware
 app.use(express.json());
 app.use(express.static('public'));
@@ -543,6 +734,20 @@ app.get('/api/verify/:city', async (req, res) => {
   }
 });
 
+// 5-day preparation overview for a capital city (Prague = CZ, Budapest = HU)
+app.get('/api/preparation/:city', async (req, res) => {
+  const city = cities.find(c => c.name === req.params.city);
+  if (!city) {
+    return res.status(404).json({ error: 'City not found' });
+  }
+  try {
+    res.json(await fetchPreparation(city));
+  } catch (err) {
+    console.error(`Preparation failed for ${req.params.city}:`, err.message);
+    res.status(500).json({ error: 'Could not build preparation overview' });
+  }
+});
+
 // Initialize and start
 async function start() {
   await initDB();
@@ -568,4 +773,7 @@ if (require.main === module) {
   start().catch(console.error);
 }
 
-module.exports = { getDateString, haversineKm, runDataChecks, APP_TIMEZONE, VERIFY };
+module.exports = {
+  getDateString, haversineKm, runDataChecks, APP_TIMEZONE, VERIFY,
+  parsePreparation, buildNotes, classifyPressure, classifyWind, classifyClouds, describeWeather
+};

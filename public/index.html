@@ -357,6 +357,83 @@
         table.data-table td.today-col { color: #4ecca3; font-weight: 600; }
         table.data-table tbody tr:hover td { background: rgba(255, 255, 255, 0.03); }
         table.data-table td.na { color: #555; }
+
+        /* Preparation (CZ / HU) table */
+        table.prep-table {
+            border-collapse: collapse;
+            width: 100%;
+            font-size: 0.9rem;
+            min-width: 720px;
+        }
+
+        table.prep-table caption {
+            text-align: left;
+            color: #fff;
+            font-weight: 700;
+            font-size: 1.05rem;
+            margin-bottom: 12px;
+        }
+
+        table.prep-table th,
+        table.prep-table td {
+            padding: 9px 12px;
+            text-align: center;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        table.prep-table thead th {
+            color: #4ecca3;
+            font-weight: 700;
+            background: rgba(15, 52, 96, 0.5);
+        }
+
+        table.prep-table thead th .col-date {
+            display: block;
+            font-weight: 400;
+            color: #8fa3b8;
+            font-size: 0.72rem;
+        }
+
+        table.prep-table th.row-label {
+            text-align: left;
+            color: #cfd8e3;
+            font-weight: 600;
+            background: #16213e;
+            white-space: nowrap;
+        }
+
+        table.prep-table td.prep-note {
+            text-align: left;
+            font-size: 0.78rem;
+            color: #e6c98a;
+            line-height: 1.35;
+        }
+
+        table.prep-table td.blank { color: #4a5568; }
+
+        /* Day-over-day swing colours (toward / away from higher solar FVE output) */
+        .swing-vg { background: rgba(46, 204, 113, 0.55); color: #06231a; font-weight: 700; }
+        .swing-g  { background: rgba(46, 204, 113, 0.26); }
+        .swing-r  { background: rgba(231, 76, 60, 0.30); }
+        .swing-dr { background: rgba(192, 57, 43, 0.66); color: #fff; font-weight: 700; }
+
+        .prep-legend {
+            margin-top: 16px;
+            font-size: 0.76rem;
+            color: #9fb0c3;
+            line-height: 1.6;
+            text-align: left;
+        }
+
+        .prep-legend .swatch {
+            display: inline-block;
+            width: 14px; height: 14px;
+            border-radius: 3px;
+            vertical-align: middle;
+            margin: 0 4px 0 10px;
+        }
+
+        .prep-legend .note { margin-top: 6px; color: #7f8ea3; }
     </style>
 </head>
 <body>
@@ -373,6 +450,8 @@
         <div class="tabs">
             <button class="tab-btn active" id="tabGraphs" onclick="showTab('graphs')">📊 Graphs</button>
             <button class="tab-btn" id="tabTable" onclick="showTab('table')">📋 Table</button>
+            <button class="tab-btn" id="tabCzPrep" onclick="showTab('czprep')">🇨🇿 CZ preparation</button>
+            <button class="tab-btn" id="tabHuPrep" onclick="showTab('huprep')">🇭🇺 HU preparation</button>
         </div>
 
       <div id="graphsView">
@@ -478,6 +557,24 @@
             </div>
         </div>
       </div><!-- /tableView -->
+
+      <div id="czPrepView" style="display:none;">
+        <div class="table-panel">
+            <div class="table-scroll">
+                <div id="czPrepContainer"></div>
+            </div>
+            <div class="prep-legend" id="czPrepLegend"></div>
+        </div>
+      </div><!-- /czPrepView -->
+
+      <div id="huPrepView" style="display:none;">
+        <div class="table-panel">
+            <div class="table-scroll">
+                <div id="huPrepContainer"></div>
+            </div>
+            <div class="prep-legend" id="huPrepLegend"></div>
+        </div>
+      </div><!-- /huPrepView -->
 
         <div class="status-bar" id="statusBar">
             Loading...
@@ -759,15 +856,152 @@
             }
         }
 
+        // ---- Preparation (CZ / HU) ----------------------------------------
+
+        const PREP_CONFIG = {
+            CZ: { capital: 'Prague',   container: 'czPrepContainer', legend: 'czPrepLegend' },
+            HU: { capital: 'Budapest', container: 'huPrepContainer', legend: 'huPrepLegend' },
+        };
+
+        // Pick a colour class for a day-over-day change.
+        //   goodUp = true  -> an increase is good for solar (FVE)
+        //   goodUp = false -> a decrease is good for solar (FVE)
+        // Returns '' (no colour) when either value is missing.
+        function swingClass(curr, prev, goodUp, t1, t2) {
+            if (curr === null || curr === undefined || prev === null || prev === undefined) return '';
+            let delta = goodUp ? (curr - prev) : (prev - curr);
+            if (delta >= t2) return 'swing-vg';
+            if (delta >= t1) return 'swing-g';
+            if (delta <= -t2) return 'swing-dr';
+            if (delta <= -t1) return 'swing-r';
+            return '';
+        }
+
+        function prepCell(value, suffix, swingCls) {
+            if (value === null || value === undefined || value === '') {
+                return '<td class="blank">—</td>';
+            }
+            return `<td class="${swingCls || ''}">${value}${suffix || ''}</td>`;
+        }
+
+        async function loadPreparation(country) {
+            const cfg = PREP_CONFIG[country];
+            const container = document.getElementById(cfg.container);
+            container.innerHTML = '<div style="color:#8fa3b8;padding:10px;">Loading…</div>';
+            try {
+                const res = await fetch(`/api/preparation/${encodeURIComponent(cfg.capital)}`);
+                const data = await res.json();
+                if (!data || !Array.isArray(data.days) || !data.days.length) {
+                    container.innerHTML = '<div class="error">Could not load preparation data.</div>';
+                    return;
+                }
+                renderPreparation(country, data);
+            } catch (e) {
+                console.error('Error loading preparation:', e);
+                container.innerHTML = '<div class="error">Could not load preparation data.</div>';
+            }
+        }
+
+        function renderPreparation(country, data) {
+            const cfg = PREP_CONFIG[country];
+            const days = data.days;
+            const round = v => (v === null || v === undefined) ? null : Math.round(v);
+            const prevOf = i => (i > 0 ? days[i - 1] : null);
+
+            const head = days.map(d =>
+                `<th>${d.label}<span class="col-date">${d.date || ''}</span></th>`).join('');
+
+            // Temperature rows — warmer than the previous day shades green
+            // (warm days in this region tend to be sunnier -> more FVE).
+            function tempRow(label, key) {
+                let row = `<th class="row-label">${label}</th>`;
+                days.forEach((d, i) => {
+                    const p = prevOf(i);
+                    const cls = p ? swingClass(d.temp[key], p.temp[key], true, 2.5, 6) : '';
+                    row += prepCell(round(d.temp[key]), '°', cls);
+                });
+                return `<tr>${row}</tr>`;
+            }
+
+            // Plain text rows (no colour).
+            function textRow(label, valueFn) {
+                let row = `<th class="row-label">${label}</th>`;
+                days.forEach(d => { row += prepCell(valueFn(d), '', ''); });
+                return `<tr>${row}</tr>`;
+            }
+
+            // Clouds — fewer clouds than the previous day shades green.
+            let cloudsRow = `<th class="row-label">Clouds</th>`;
+            days.forEach((d, i) => {
+                const p = prevOf(i);
+                const cls = p ? swingClass(d.clouds.meanPct, p.clouds.meanPct, false, 12, 30) : '';
+                cloudsRow += prepCell(d.clouds.class, '', cls);
+            });
+
+            // Solar (FVE) — more daily radiation than the previous day shades green.
+            let solarRow = `<th class="row-label">Solar (FVE)</th>`;
+            days.forEach((d, i) => {
+                const p = prevOf(i);
+                const cls = p ? swingClass(d.solar.radSum, p.solar.radSum, true, 3, 8) : '';
+                solarRow += prepCell(round(d.solar.radSum), '', cls);
+            });
+
+            // Notes.
+            let noteRow = `<th class="row-label">Note</th>`;
+            days.forEach(d => {
+                const notes = (d.notes || []).slice(0, 3).join('; ');
+                noteRow += notes ? `<td class="prep-note">${notes}</td>` : '<td class="blank">—</td>';
+            });
+
+            document.getElementById(cfg.container).innerHTML = `
+                <table class="prep-table">
+                    <caption>${country} (${cfg.capital}) — 5-day preparation overview</caption>
+                    <thead><tr><th class="row-label">${country} (${cfg.capital})</th>${head}</tr></thead>
+                    <tbody>
+                        ${tempRow('Temp 8:00', 'h8')}
+                        ${tempRow('Temp 16:00', 'h16')}
+                        ${tempRow('Temp 0:00', 'h0')}
+                        ${textRow('Pressure', d => d.pressure.class)}
+                        ${textRow('Wind', d => d.wind.class)}
+                        ${textRow('Weather', d => d.weather.desc)}
+                        <tr>${cloudsRow}</tr>
+                        <tr>${solarRow}</tr>
+                        <tr>${noteRow}</tr>
+                    </tbody>
+                </table>`;
+
+            const when = data.generatedAt ? new Date(data.generatedAt).toLocaleString() : '';
+            document.getElementById(cfg.legend).innerHTML =
+                '<strong>Colour = change vs the previous day, for solar (FVE) output.</strong><br>' +
+                '<span class="swatch swing-vg"></span> much higher' +
+                '<span class="swatch swing-g"></span> higher' +
+                '<span class="swatch swing-r"></span> lower' +
+                '<span class="swatch swing-dr"></span> much lower &nbsp;' +
+                '(greener = better for solar: warmer / clearer / more radiation; redder = worse).' +
+                `<div class="note">Source: Open-Meteo for ${cfg.capital} (used as the ${country} proxy). ` +
+                'Solar = daily shortwave radiation in MJ/m². “—” means the value was not provided by the source ' +
+                `(nothing is invented). Generated ${when}.</div>`;
+        }
+
         // ---- Tabs ---------------------------------------------------------
 
+        const VIEWS = {
+            graphs: { view: 'graphsView', tab: 'tabGraphs' },
+            table:  { view: 'tableView',  tab: 'tabTable' },
+            czprep: { view: 'czPrepView', tab: 'tabCzPrep' },
+            huprep: { view: 'huPrepView', tab: 'tabHuPrep' },
+        };
+
         function showTab(tab) {
-            const isTable = tab === 'table';
-            document.getElementById('graphsView').style.display = isTable ? 'none' : '';
-            document.getElementById('tableView').style.display = isTable ? '' : 'none';
-            document.getElementById('tabGraphs').classList.toggle('active', !isTable);
-            document.getElementById('tabTable').classList.toggle('active', isTable);
-            if (isTable) loadTable();
+            Object.keys(VIEWS).forEach(key => {
+                const v = VIEWS[key];
+                const active = (key === tab);
+                document.getElementById(v.view).style.display = active ? '' : 'none';
+                document.getElementById(v.tab).classList.toggle('active', active);
+            });
+            if (tab === 'table') loadTable();
+            if (tab === 'czprep') loadPreparation('CZ');
+            if (tab === 'huprep') loadPreparation('HU');
         }
 
         // Update status bar
@@ -794,10 +1028,10 @@
                     loadWeatherData('left', leftCity),
                     loadWeatherData('right', rightCity)
                 ]);
-                // Refresh the table too if it is the active view.
-                if (document.getElementById('tableView').style.display !== 'none') {
-                    loadTable();
-                }
+                // Refresh whichever secondary view is currently open.
+                if (document.getElementById('tableView').style.display !== 'none') loadTable();
+                if (document.getElementById('czPrepView').style.display !== 'none') loadPreparation('CZ');
+                if (document.getElementById('huPrepView').style.display !== 'none') loadPreparation('HU');
             } catch (err) {
                 console.error('Error refreshing data:', err);
                 alert('Error refreshing data. Try again.');
