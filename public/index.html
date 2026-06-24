@@ -4,8 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Weather Comparison</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation"></script>
+    <!-- Pinned to known-good versions. Do NOT change to unversioned "latest"
+         URLs: an upstream major release could silently break the charts. -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.1.0/dist/chartjs-plugin-annotation.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -135,6 +137,25 @@
             align-items: center;
             gap: 5px;
             font-size: 0.75rem;
+            cursor: pointer;
+            user-select: none;
+            padding: 2px 6px;
+            border-radius: 6px;
+            transition: background 0.15s, opacity 0.15s;
+        }
+
+        .legend-item:hover {
+            background: rgba(255, 255, 255, 0.07);
+        }
+
+        /* A hidden series: dim it and strike through the label so it is clear
+           the line was toggled off (click again to bring it back). */
+        .legend-item.legend-hidden {
+            opacity: 0.4;
+        }
+
+        .legend-item.legend-hidden span {
+            text-decoration: line-through;
         }
 
         .legend-line {
@@ -609,18 +630,27 @@
             updateTodayDate();
             setupDropdowns();
             setupTable();
+            setupLegends();
             await Promise.all([
                 loadWeatherData('left', leftCity),
                 loadWeatherData('right', rightCity)
             ]);
         }
 
-        // Update today's date in header
+        // Update today's date in header.
+        // The server does all of its day math in Europe/Prague (see APP_TIMEZONE
+        // in server.js). Deriving the header date from the browser's local zone
+        // or from UTC could disagree with the server around midnight and show the
+        // wrong day, so compute both the weekday and the date in Europe/Prague.
         function updateTodayDate() {
-            const today = new Date();
-            const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-            const dayName = days[today.getDay()];
-            const dateStr = today.toISOString().split('T')[0];
+            const now = new Date();
+            const dateStr = new Intl.DateTimeFormat('en-CA', {
+                timeZone: 'Europe/Prague',
+                year: 'numeric', month: '2-digit', day: '2-digit'
+            }).format(now); // YYYY-MM-DD
+            const dayName = new Intl.DateTimeFormat('en-US', {
+                timeZone: 'Europe/Prague', weekday: 'long'
+            }).format(now);
             document.getElementById('todayDate').textContent = `Today: ${dayName} ${dateStr}`;
         }
 
@@ -1063,15 +1093,87 @@
                 ...data.tomorrow.temps,
                 ...data.dayAfterTomorrow.temps,
                 ...(data.pastDaysAvg ? data.pastDaysAvg.temps : [])
-            ].filter(t => t !== null);
-            
+            ].filter(t => t !== null && t !== undefined && !Number.isNaN(t));
+
+            // No usable values yet — bail out instead of letting Math.min/max
+            // return Infinity/-Infinity (which would feed bad annotation bounds).
+            if (allTemps.length === 0) {
+                return { min: null, max: null, showZeroLine: false };
+            }
+
             const min = Math.min(...allTemps);
             const max = Math.max(...allTemps);
-            
+
             // Show zero line if data crosses or gets close to 0
             const showZeroLine = min < 2 && max > -2;
-            
+
             return { min, max, showZeroLine };
+        }
+
+        // ---- Clickable legends --------------------------------------------
+        // The legend under each graph is custom HTML (Chart.js' built-in legend
+        // is disabled). Each legend item maps 1:1, by DOM order, to a dataset in
+        // renderChart(). Clicking an item shows/hides that line.
+
+        // Which datasets are hidden, per chart side. Kept here — not just inside
+        // the chart — so the choice survives a re-render when the user switches
+        // city (the chart is destroyed and rebuilt on every city change).
+        const hiddenDatasets = { left: new Set(), right: new Set() };
+
+        // Find the .legend-item elements that belong to a given chart side.
+        function legendItemsFor(side) {
+            const canvasId = side === 'left' ? 'leftChart' : 'rightChart';
+            const panel = document.getElementById(canvasId).closest('.chart-panel');
+            return panel ? panel.querySelectorAll('.legend-custom .legend-item') : [];
+        }
+
+        // Attach click/keyboard handlers to every legend item (runs once).
+        function setupLegends() {
+            ['left', 'right'].forEach(side => {
+                legendItemsFor(side).forEach((item, index) => {
+                    item.dataset.ds = index;
+                    item.setAttribute('role', 'button');
+                    item.setAttribute('tabindex', '0');
+                    item.setAttribute('aria-pressed', 'true'); // visible by default
+                    item.title = 'Click to show/hide this line';
+                    item.addEventListener('click', () => toggleSeries(side, index, item));
+                    item.addEventListener('keydown', (e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            toggleSeries(side, index, item);
+                        }
+                    });
+                });
+            });
+        }
+
+        // Toggle one line on a chart and remember the choice.
+        function toggleSeries(side, index, itemEl) {
+            const chart = side === 'left' ? leftChart : rightChart;
+            if (!chart) return;
+            const willHide = chart.isDatasetVisible(index);
+            chart.setDatasetVisibility(index, !willHide);
+            if (willHide) hiddenDatasets[side].add(index);
+            else hiddenDatasets[side].delete(index);
+            itemEl.classList.toggle('legend-hidden', willHide);
+            itemEl.setAttribute('aria-pressed', String(!willHide));
+            chart.update();
+        }
+
+        // Re-apply the remembered show/hide state after a chart is (re)built,
+        // and sync the legend items' struck-through styling to match.
+        function applyLegendState(side) {
+            const chart = side === 'left' ? leftChart : rightChart;
+            if (!chart) return;
+            const hidden = hiddenDatasets[side];
+            legendItemsFor(side).forEach((item, i) => {
+                const isHidden = hidden.has(i);
+                item.classList.toggle('legend-hidden', isHidden);
+                item.setAttribute('aria-pressed', String(!isHidden));
+            });
+            if (hidden.size === 0) return; // nothing hidden -> chart already correct
+            chart.data.datasets.forEach((ds, i) => chart.setDatasetVisibility(i, !hidden.has(i)));
+            chart.update();
         }
 
         // Render chart
@@ -1289,6 +1391,9 @@
             } else {
                 rightChart = newChart;
             }
+
+            // Re-apply any lines the user had toggled off for this side.
+            applyLegendState(side);
         }
 
         // Start the app
