@@ -415,6 +415,13 @@
             font-size: 0.72rem;
         }
 
+        table.prep-table thead th .col-day {
+            display: block;
+            font-weight: 600;
+            color: #7fd8bd;
+            font-size: 0.72rem;
+        }
+
         table.prep-table th.row-label {
             text-align: left;
             color: #cfd8e3;
@@ -947,14 +954,30 @@
             }
         }
 
+        // Full weekday name (e.g. "Thursday") for a "YYYY-MM-DD" date string.
+        // Anchored at noon UTC and formatted in UTC so the weekday can never be
+        // thrown off by the browser's timezone or a midnight/DST boundary.
+        function weekdayName(dateStr) {
+            if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return '';
+            const [y, m, d] = dateStr.split('-').map(Number);
+            const dt = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+            return new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'long' }).format(dt);
+        }
+
         function renderPreparation(country, data) {
             const cfg = PREP_CONFIG[country];
             const days = data.days;
             const round = v => (v === null || v === undefined) ? null : Math.round(v);
             const prevOf = i => (i > 0 ? days[i - 1] : null);
 
-            const head = days.map(d =>
-                `<th>${d.label}<span class="col-date">${d.date || ''}</span></th>`).join('');
+            // Three-line header per day: label / date / weekday name.
+            const head = days.map(d => {
+                const day = weekdayName(d.date);
+                return `<th>${d.label}` +
+                       `<span class="col-date">${d.date || ''}</span>` +
+                       (day ? `<span class="col-day">${day}</span>` : '') +
+                       `</th>`;
+            }).join('');
 
             // Temperature rows — warmer than the previous day shades green
             // (warm days in this region tend to be sunnier -> more FVE).
