@@ -28,6 +28,9 @@ blank, and downloaded data is cross‑checked against an independent reanalysis 
   for solar output.
 - **Built‑in data verification** — each city shows a badge summarising automated sanity
   checks, including a cross‑check against Open‑Meteo's ERA5 reanalysis archive.
+- **LIVE tab** — a right‑now snapshot for Prague, Brno, Budapest and Debrecen across
+  temperature, wind, rain/storms and pressure, each with its current value and a ▲/▼ vs the
+  same hour yesterday. Hover a category to see what it means for the electric grid.
 - **Automatic refresh** — data is re‑fetched on startup and every 6 hours; a manual
   "Refresh All Data" button is also available.
 
@@ -55,7 +58,8 @@ Temperature-Zephyr-main/
 │   └── index.html       # Entire front-end (HTML + CSS + JS in one file)
 ├── package.json
 ├── package-lock.json
-└── README.md
+├── README.md
+└── Temperature1.0/       # Frozen v1.0 baseline snapshot (pre-LIVE)
 ```
 
 **Data flow:** `server.js` fetches each city from Open‑Meteo, stores the parsed result as a
@@ -202,6 +206,25 @@ https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=47.5&lon=19.04
 
 ---
 
+## LIVE tab
+
+A "right now" snapshot for **Prague, Brno, Budapest and Debrecen** across four categories:
+
+| Category | Current value | vs yesterday |
+|----------|---------------|--------------|
+| 🌡️ Temperature | °C | ▲ / ▼ / ▬ vs the same hour yesterday |
+| 💨 Wind | km/h (+ gust) | ▲ / ▼ / ▬ |
+| 🌧️ Rain / Storms | mm (+ sky condition, ⛈️ flag on storms) | ▲ / ▼ / ▬ |
+| 🎚️ Pressure | hPa | ▲ / ▼ / ▬ |
+
+Each value is Open‑Meteo's `current` reading; the arrow compares it to the matching hour 24 h
+earlier (a small dead‑band keeps tiny wiggles as "flat"). **Hover any category header** for a
+one‑line explanation of what that metric means for the electric grid (demand, wind/solar
+generation, faults). The tab auto‑refreshes every 5 minutes while open. Served by
+`/api/live/:city` (10‑minute cache).
+
+---
+
 ## API
 
 | Method | Route | Description |
@@ -213,6 +236,8 @@ https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=47.5&lon=19.04
 | `GET`  | `/api/verify/:city` | Run/return the data‑verification checks |
 | `GET`  | `/api/preparation/:city` | 5‑day "future" overview for a capital |
 | `GET`  | `/api/crosscheck/:city` | Cross‑check today's shown values vs independent models + MET Norway |
+| `GET`  | `/api/live/:city` | Right‑now snapshot + direction vs the same hour yesterday |
+| `GET`  | `/api/market/:country` | Power‑market weather brief for `CZ` or `HU` (demand / solar / wind / risks) |
 
 ---
 
@@ -256,10 +281,47 @@ fetches all cities, and schedules a refresh every 6 hours.
 | Refresh schedule | `cron.schedule('0 */6 * * *', …)` |
 | Cache freshness (API) | 1 hour (in `/api/weather/:city`) |
 | Cross‑check models, threshold, User‑Agent | `CROSSCHECK` |
+| LIVE cache TTL | `LIVE_CACHE_MS` (10 min) |
 
 ---
 
 ## Changelog
+
+### v1.2.0 — July 2026 — consensus correction, Market brief, hardening
+- **Consensus correction (cross‑check upgrade).** The cross‑check no longer only flags bad
+  hours — when the primary (best_match) value is > 4 °C away from the median of the other
+  sources *and* at least 3 of those sources agree within 2 °C of each other, the displayed
+  Today value is replaced by their median (cyan ◆ marker; the raw model value stays in the
+  tooltip and in the API's `primary` field). When the other sources disagree among
+  themselves, the hour is only flagged (amber ▲), never replaced. Missing primary hours are
+  gap‑filled from a tight consensus. Config: `CROSSCHECK.CONSENSUS_SPREAD_C`,
+  `CROSSCHECK.CONSENSUS_MIN_SOURCES`. Cached/stored data is never modified.
+- **📈 Market tab.** New per‑country (CZ / HU) power‑fundamentals brief for Yesterday
+  (context) / Today / Tomorrow / D+2: population‑weighted demand temperature with HDD/CDD,
+  a 0–100 % solar index (daily radiation vs clear‑sky monthly max), a 0–100 % wind index
+  (120 m hub‑height wind through a simplified turbine power curve), grid‑risk flags
+  (storms, cut‑out gusts, morning fog, snow, heat, frost, heavy rain) and a plain‑language
+  day‑over‑day signal incl. residual‑load direction. New `/api/market/:country` route.
+  Fundamentals only — explicitly not price advice.
+- **Startup resilience.** The server now starts even when Postgres is missing or down —
+  it warns and degrades to an in‑memory cache (previously it silently never listened).
+  A pool error handler prevents crashes on DB restarts.
+- **Front‑end data hygiene.** HTTP errors / error payloads are no longer cached as if they
+  were weather data (previously a single 500 could break charts until a manual refresh);
+  the Czechia average now skips invalid cities instead of crashing.
+- **LIVE pressure fix.** The yesterday‑delta is only computed when both values are MSL
+  pressure; the surface‑pressure fallback (~30–45 hPa lower at these altitudes) no longer
+  produces a bogus ▼ comparison.
+- **Test suite.** `npm test` (`node --test tests/`) with 27 offline unit tests covering the
+  cross‑check consensus logic, market brief, LIVE parsing, verification and helpers.
+
+
+### v1.1.0 — July 2026 — LIVE tab
+- **LIVE tab.** New right‑now dashboard for Prague, Brno, Budapest and Debrecen —
+  temperature, wind, rain/storms and pressure, each with the current value + ▲/▼ vs the same
+  hour yesterday and hover‑for‑grid‑meaning tooltips. New `/api/live/:city` route.
+- **Versioning.** The pre‑LIVE app is archived as a frozen baseline in `Temperature1.0/`;
+  the main folder is bumped to **1.1.0** and carries development forward.
 
 ### July 2026 — data trust
 - **Cross‑check / confidence.** Today's shown values are now compared against independent

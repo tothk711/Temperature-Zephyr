@@ -5,11 +5,21 @@ const cron = require('node-cron');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// PostgreSQL connection
+// PostgreSQL connection. The DB is a cache, not the source of truth — if it is
+// missing or unreachable the app must still serve data, so every DB access is
+// guarded by `dbReady` and backed by an in-memory fallback cache.
+const DB_ENABLED = !!process.env.DATABASE_URL;
+let dbReady = false;
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
+  ssl: DB_ENABLED ? { rejectUnauthorized: false } : false
 });
+// Never let an idle-client error (e.g. DB restart) crash the process.
+pool.on('error', err => console.error('Postgres pool error:', err.message));
+
+// In-memory fallback: { cityName: { data, updatedAt } }. Used when the DB is
+// unavailable, and always written so a DB outage never blanks the app.
+const memWeatherCache = {};
 
 // Cities configuration
 const cities = [
@@ -23,17 +33,27 @@ const cities = [
   { name: "Debrecen", lat: 47.53, lon: 21.63 },
 ];
 
-// Initialize database (simple cache table)
+// Initialize database (simple cache table). Failure is not fatal — the app
+// falls back to the in-memory cache and keeps running.
 async function initDB() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS weather_cache (
-      id SERIAL PRIMARY KEY,
-      city_name VARCHAR(50) NOT NULL UNIQUE,
-      data JSONB NOT NULL,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-  console.log('Database initialized');
+  if (!DB_ENABLED) {
+    console.warn('DATABASE_URL not set — running with in-memory cache only (no persistence across restarts).');
+    return;
+  }
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS weather_cache (
+        id SERIAL PRIMARY KEY,
+        city_name VARCHAR(50) NOT NULL UNIQUE,
+        data JSONB NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    dbReady = true;
+    console.log('Database initialized');
+  } catch (err) {
+    console.error('Database unavailable — continuing with in-memory cache only:', err.message);
+  }
 }
 
 // Timezone used for all date math. The weather API returns timestamps in this
@@ -68,12 +88,12 @@ function getDateString(offsetDays = 0) {
 async function fetchWeatherFromAPI(city) {
   // Get 8 days of history (for 7 days ago to yesterday) and 3 days forecast
   const url = `https://api.open-meteo.com/v1/forecast?latitude=${city.lat}&longitude=${city.lon}&hourly=temperature_2m&past_days=8&forecast_days=3&timezone=Europe%2FPrague`;
-  
+
   // Previous Runs API - get both current forecast AND yesterday's forecast in one call
   // temperature_2m = current/latest forecast
   // temperature_2m_previous_day1 = forecast from 1 day ago (yesterday ~11 AM)
   const previousRunUrl = `https://previous-runs-api.open-meteo.com/v1/forecast?latitude=${city.lat}&longitude=${city.lon}&hourly=temperature_2m_previous_day1&forecast_days=3&timezone=Europe%2FPrague`;
-  
+
   try {
     // Fetch both APIs in parallel
     const [response, prevResponse] = await Promise.all([
@@ -83,7 +103,7 @@ async function fetchWeatherFromAPI(city) {
         return null;
       })
     ]);
-    
+
     if (!response.ok) {
       throw new Error(`API responded with HTTP ${response.status}`);
     }
@@ -157,12 +177,12 @@ async function fetchWeatherFromAPI(city) {
     if (prevData && prevData.hourly && prevData.hourly.temperature_2m_previous_day1) {
       const prevTimes = prevData.hourly.time;
       const prevTemps = prevData.hourly.temperature_2m_previous_day1;
-      
+
       for (let i = 0; i < prevTimes.length; i++) {
         const dateStr = prevTimes[i].split('T')[0];
         const hour = parseInt(prevTimes[i].split('T')[1].split(':')[0]);
         const temp = prevTemps[i];
-        
+
         // Only get data for today's date
         if (dateStr === days.today) {
           result.todayForecast.temps[hour] = temp;
@@ -192,13 +212,15 @@ async function fetchWeatherFromAPI(city) {
   }
 }
 
-// Store weather data in cache
+// Store weather data in cache (memory always; DB when available)
 async function cacheWeatherData(cityName, data) {
+  memWeatherCache[cityName] = { data, updatedAt: new Date() };
+  if (!dbReady) return;
   try {
     await pool.query(`
       INSERT INTO weather_cache (city_name, data, updated_at)
       VALUES ($1, $2, NOW())
-      ON CONFLICT (city_name) 
+      ON CONFLICT (city_name)
       DO UPDATE SET data = $2, updated_at = NOW()
     `, [cityName, JSON.stringify(data)]);
     console.log(`Cached weather data for ${cityName}`);
@@ -207,30 +229,31 @@ async function cacheWeatherData(cityName, data) {
   }
 }
 
-// Get cached weather data
+// Get cached weather data (DB first, then in-memory fallback)
 async function getCachedWeather(cityName) {
-  try {
-    const result = await pool.query(`
-      SELECT data, updated_at FROM weather_cache WHERE city_name = $1
-    `, [cityName]);
-    
-    if (result.rows.length > 0) {
-      return {
-        data: result.rows[0].data,
-        updatedAt: result.rows[0].updated_at
-      };
+  if (dbReady) {
+    try {
+      const result = await pool.query(`
+        SELECT data, updated_at FROM weather_cache WHERE city_name = $1
+      `, [cityName]);
+
+      if (result.rows.length > 0) {
+        return {
+          data: result.rows[0].data,
+          updatedAt: result.rows[0].updated_at
+        };
+      }
+    } catch (err) {
+      console.error(`Error getting cached data for ${cityName}:`, err.message);
     }
-    return null;
-  } catch (err) {
-    console.error(`Error getting cached data for ${cityName}:`, err.message);
-    return null;
   }
+  return memWeatherCache[cityName] || null;
 }
 
 // Fetch and cache data for all cities
 async function fetchAllCities() {
   console.log('Starting weather data fetch for all cities...');
-  
+
   for (const city of cities) {
     const data = await fetchWeatherFromAPI(city);
     if (data) {
@@ -247,6 +270,9 @@ async function fetchAllCities() {
   }
   if (typeof crossCheckCache === 'object') {
     Object.keys(crossCheckCache).forEach(k => delete crossCheckCache[k]);
+  }
+  if (typeof marketCache === 'object') {
+    Object.keys(marketCache).forEach(k => delete marketCache[k]);
   }
 
   console.log('Finished fetching weather data for all cities');
@@ -666,9 +692,11 @@ async function fetchPreparation(city) {
 //   - other individual Open-Meteo models (ECMWF, DWD ICON, NOAA GFS, Météo-France)
 //   - MET Norway (a completely separate provider / different agency)
 // If the shown value disagrees with the consensus (median) of the others by
-// more than a threshold, that hour is flagged as low-confidence. We NEVER change
-// the data — only flag it. The pure comparison (analyzeCrossCheck) does no
-// network I/O and is unit tested.
+// more than a threshold, that hour is flagged as low-confidence — and when the
+// other sources agree TIGHTLY among themselves, the displayed value is
+// replaced by their median (the raw model value is always preserved).
+// The pure comparison (analyzeCrossCheck) does no network I/O and is unit
+// tested.
 // ---------------------------------------------------------------------------
 
 const CROSSCHECK = {
@@ -678,6 +706,14 @@ const CROSSCHECK = {
   MODELS: ['ecmwf_ifs025', 'icon_seamless', 'gfs_seamless', 'meteofrance_seamless'],
   DEVIATION_C: 4,     // shown value vs median of the others, before flagging
   MIN_SOURCES: 2,     // need at least this many other sources to judge an hour
+  // Consensus override: if the primary is off by > DEVIATION_C while the OTHER
+  // sources agree among themselves (spread <= CONSENSUS_SPREAD_C across at
+  // least CONSENSUS_MIN_SOURCES of them), the primary is almost certainly the
+  // outlier — the displayed value becomes the median of the others. When the
+  // other sources disagree among themselves we only flag, never substitute
+  // (a median of a scattered set is not a trustworthy number).
+  CONSENSUS_SPREAD_C: 2,
+  CONSENSUS_MIN_SOURCES: 3,
   CACHE_MS: 60 * 60 * 1000,
   // MET Norway requires a User-Agent identifying your app + contact. Override
   // via env so you can put a real contact address (per met.no terms of service).
@@ -711,11 +747,21 @@ function localHourIndex(utcIso, tz, todayLocal) {
 // Pure: compare shown values against other sources, hour by hour. No network.
 //   primary : number[24]         best_match "today" (may contain nulls)
 //   sources : { label: number[24] }  other models / providers
+//
+// Per-hour outcomes:
+//   - agree                      -> display = primary
+//   - primary off, others TIGHT  -> display = median of others (corrected=true)
+//   - primary off, others LOOSE  -> flag only (suspect=true), display = primary
+//   - primary missing, others TIGHT -> display = median (filled=true)
+// The raw primary value is always kept in `primary`; corrections only ever
+// change `display`. Stored/cached data is never modified.
 function analyzeCrossCheck(primary, sources, cfg = CROSSCHECK) {
   const labels = Object.keys(sources || {});
   const prim = Array.isArray(primary) ? primary : [];
   const hours = [];
   const suspectHours = [];
+  const correctedHours = [];
+  const filledHours = [];
   for (let h = 0; h < 24; h++) {
     const others = [];
     for (const lbl of labels) {
@@ -723,21 +769,33 @@ function analyzeCrossCheck(primary, sources, cfg = CROSSCHECK) {
       if (typeof v === 'number' && !Number.isNaN(v)) others.push({ label: lbl, temp: v });
     }
     const p = (typeof prim[h] === 'number' && !Number.isNaN(prim[h])) ? prim[h] : null;
-    let median = null, min = null, max = null, spread = null, deviation = null, suspect = false;
+    let median = null, min = null, max = null, spread = null, deviation = null;
+    let suspect = false, corrected = false, filled = false, display = p;
     if (others.length) {
       const vals = others.map(o => o.temp).sort((a, b) => a - b);
       const mid = Math.floor(vals.length / 2);
       median = vals.length % 2 ? vals[mid] : (vals[mid - 1] + vals[mid]) / 2;
       min = vals[0]; max = vals[vals.length - 1]; spread = max - min;
+      const tight = others.length >= cfg.CONSENSUS_MIN_SOURCES &&
+                    spread <= cfg.CONSENSUS_SPREAD_C;
       if (p !== null && others.length >= cfg.MIN_SOURCES) {
         deviation = Math.abs(p - median);
-        suspect = deviation > cfg.DEVIATION_C;
+        if (deviation > cfg.DEVIATION_C) {
+          if (tight) { corrected = true; display = median; }
+          else       { suspect = true; }
+        }
+      } else if (p === null && tight) {
+        filled = true; display = median;
       }
     }
     if (suspect) suspectHours.push(h);
-    hours.push({ hour: h, primary: p, others, median, min, max, spread, deviation, suspect });
+    if (corrected) correctedHours.push(h);
+    if (filled) filledHours.push(h);
+    hours.push({ hour: h, primary: p, display, others, median, min, max,
+                 spread, deviation, suspect, corrected, filled });
   }
-  return { hours, suspectHours, sourceCount: labels.length, sources: labels };
+  return { hours, suspectHours, correctedHours, filledHours,
+           sourceCount: labels.length, sources: labels };
 }
 
 // Fetch one Open-Meteo model's today temps as a 24-slot local-hour array, or null.
@@ -822,11 +880,401 @@ async function crossCheckCity(city) {
     generatedAt: new Date().toISOString(),
     timezone: APP_TIMEZONE,
     deviationLimit: CROSSCHECK.DEVIATION_C,
+    consensusSpreadLimit: CROSSCHECK.CONSENSUS_SPREAD_C,
+    consensusMinSources: CROSSCHECK.CONSENSUS_MIN_SOURCES,
     ...analysis,
     status: analysis.sourceCount === 0 ? 'unavailable'
+          : analysis.correctedHours.length ? 'corrected'
           : (analysis.suspectHours.length ? 'warning' : 'ok')
   };
   crossCheckCache[city.name] = { result, ts: Date.now() };
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// LIVE snapshot
+//
+// "Right now" conditions for a city plus whether each metric is higher or lower
+// than the same hour yesterday. Current values come from Open-Meteo's `current`
+// block; "yesterday" is the matching hour from the hourly series (past_days=1).
+// parseLive is pure/testable and never invents data — missing values stay null.
+// ---------------------------------------------------------------------------
+
+const LIVE_CACHE_MS = 10 * 60 * 1000; // 10 minutes
+const liveCache = {};
+
+// Direction of change vs yesterday, with a small dead-band so tiny wiggles read
+// as "flat".
+function liveDir(delta, eps) {
+  if (delta === null || delta === undefined || Number.isNaN(delta)) return 'flat';
+  if (delta > eps) return 'up';
+  if (delta < -eps) return 'down';
+  return 'flat';
+}
+
+// Pure: turn a raw Open-Meteo response into the LIVE structure. No network.
+function parseLive(raw) {
+  if (!raw || !raw.current) return null;
+  const cur = raw.current;
+  const h = raw.hourly || {};
+  const times = Array.isArray(h.time) ? h.time : [];
+  const idx = {};
+  for (let i = 0; i < times.length; i++) idx[times[i]] = i;
+
+  // Find the "same hour yesterday" key from the current timestamp.
+  let yKey = null;
+  const curTime = typeof cur.time === 'string' ? cur.time : null;
+  if (curTime && curTime.length >= 13) {
+    const [y, m, d] = curTime.slice(0, 10).split('-').map(Number);
+    const hh = curTime.slice(11, 13);
+    const anchor = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+    anchor.setUTCDate(anchor.getUTCDate() - 1);
+    yKey = `${anchor.toISOString().slice(0, 10)}T${hh}:00`;
+  }
+  const yi = (yKey !== null && idx[yKey] !== undefined) ? idx[yKey] : null;
+  const num = v => (typeof v === 'number' && !Number.isNaN(v)) ? v : null;
+  const yVal = arr => (yi !== null && Array.isArray(arr)) ? num(arr[yi]) : null;
+
+  const metric = (nowRaw, ydayRaw, eps) => {
+    const now = num(nowRaw), yday = num(ydayRaw);
+    const delta = (now !== null && yday !== null) ? +(now - yday).toFixed(2) : null;
+    return { value: now, yesterday: yday, delta, dir: liveDir(delta, eps) };
+  };
+
+  const code = num(cur.weather_code);
+  // Compare like with like: the hourly series is pressure_msl, so only compute
+  // a yesterday-delta when "now" is also MSL. If we have to fall back to
+  // surface_pressure (a different quantity, ~30-45 hPa lower at these cities'
+  // altitudes), show the value but no comparison.
+  const usingMsl = num(cur.pressure_msl) !== null;
+  const pressureNow = usingMsl ? cur.pressure_msl : cur.surface_pressure;
+  const pressureYday = usingMsl ? yVal(h.pressure_msl) : null;
+  return {
+    time: curTime,
+    yesterdayTime: yi !== null ? yKey : null,
+    temperature: { ...metric(cur.temperature_2m, yVal(h.temperature_2m), 0.1), unit: '°C' },
+    wind: { ...metric(cur.wind_speed_10m, yVal(h.wind_speed_10m), 0.5),
+            gust: num(cur.wind_gusts_10m), unit: 'km/h' },
+    rain: { ...metric(cur.precipitation, yVal(h.precipitation), 0.05),
+            weatherCode: code, weather: describeWeather(code), storm: isStormCode(code), unit: 'mm' },
+    pressure: { ...metric(pressureNow, pressureYday, 0.3), unit: 'hPa' }
+  };
+}
+
+async function fetchLive(city) {
+  const cached = liveCache[city.name];
+  if (cached && (Date.now() - cached.ts) < LIVE_CACHE_MS) return cached.result;
+
+  const current = 'temperature_2m,precipitation,weather_code,wind_speed_10m,wind_gusts_10m,pressure_msl,surface_pressure';
+  const hourly = 'temperature_2m,precipitation,wind_speed_10m,wind_gusts_10m,pressure_msl';
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${city.lat}&longitude=${city.lon}&current=${current}&hourly=${hourly}&past_days=1&forecast_days=1&timezone=Europe%2FPrague`;
+
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`Open-Meteo HTTP ${r.status}`);
+  const raw = await r.json();
+  if (raw.error) throw new Error(`Open-Meteo: ${raw.reason || 'error'}`);
+
+  const parsed = parseLive(raw);
+  if (!parsed) throw new Error('No current data in response');
+  const result = { city: city.name, generatedAt: new Date().toISOString(), timezone: APP_TIMEZONE, ...parsed };
+  liveCache[city.name] = { result, ts: Date.now() };
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Market brief (CZ / HU)
+//
+// Turns raw weather into the power-market fundamentals a trader actually acts
+// on, per country, for Yesterday (context) / Today / Tomorrow / D+2:
+//   - Demand:  population-weighted temperature across the country's cities,
+//              expressed as heating/cooling degree days (HDD base 18 °C,
+//              CDD base 21 °C).
+//   - Solar:   daily shortwave radiation total, normalised 0-100 % against a
+//              clear-sky-ish monthly maximum (a *display index*, not a
+//              generation forecast).
+//   - Wind:    hourly hub-height (120 m) wind speeds pushed through a
+//              simplified turbine power curve (cut-in 11, rated 43, cut-out
+//              90 km/h), averaged into a 0-100 % index.
+//   - Risks:   storms, cut-out-level gusts, morning fog, snow, heat, frost,
+//              heavy rain — anything that jolts load or generation.
+// Everything numeric comes straight from Open-Meteo; the indexes are
+// documented normalisations of it. Pure functions (parseMarketCity,
+// buildMarketBrief, windPowerIndex, solarIndex, degreeDays) are exported for
+// unit tests. Fundamentals only — this is not price advice.
+// ---------------------------------------------------------------------------
+
+const MARKET = {
+  CACHE_MS: 30 * 60 * 1000,
+  HDD_BASE: 18,   // °C — below this daily mean, heating demand grows
+  CDD_BASE: 21,   // °C — above this daily mean, cooling (AC) demand grows
+  // Approximate clear-sky daily shortwave totals (MJ/m²/day) at ~47-50°N by
+  // month (Jan..Dec). Used ONLY to normalise the solar index for display.
+  SOLAR_MAX_BY_MONTH: [6, 10, 16, 22, 27, 29, 28, 24, 18, 11, 7, 5],
+  // Simplified turbine power curve at hub height, in km/h: zero below CUT_IN,
+  // cubic ramp to RATED, flat 100 % until CUT_OUT, zero above (storm stop).
+  WIND: { CUT_IN: 11, RATED: 43, CUT_OUT: 90 },
+  // Population-based weights (millions, rough) — proxies for national demand.
+  COUNTRIES: {
+    CZ: {
+      name: 'Czechia', tz: 'Europe/Prague',
+      cities: [ { name: 'Prague', weight: 1.30 }, { name: 'Brno', weight: 0.40 },
+                { name: 'Plzen', weight: 0.18 }, { name: 'Ostrava', weight: 0.28 } ]
+    },
+    HU: {
+      name: 'Hungary', tz: 'Europe/Budapest',
+      cities: [ { name: 'Budapest', weight: 1.75 }, { name: 'Debrecen', weight: 0.20 } ]
+    }
+  }
+};
+
+const MARKET_LABELS = ['Yesterday', 'Today', 'Tomorrow', 'D+2'];
+
+// 0..1 output of a simplified turbine for one hub-height speed (km/h).
+function windPowerAt(kmh, w = MARKET.WIND) {
+  if (typeof kmh !== 'number' || Number.isNaN(kmh)) return null;
+  if (kmh < w.CUT_IN || kmh >= w.CUT_OUT) return 0;
+  if (kmh >= w.RATED) return 1;
+  const x = (kmh ** 3 - w.CUT_IN ** 3) / (w.RATED ** 3 - w.CUT_IN ** 3);
+  return Math.min(1, Math.max(0, x));
+}
+
+// Mean 0..1 power index across a day's hourly hub-height speeds.
+function windPowerIndex(speeds, w = MARKET.WIND) {
+  if (!Array.isArray(speeds)) return null;
+  let sum = 0, n = 0;
+  for (const s of speeds) {
+    const p = windPowerAt(s, w);
+    if (p !== null) { sum += p; n++; }
+  }
+  return n ? sum / n : null;
+}
+
+// 0..1 solar index: daily radiation total vs the clear-sky-ish monthly max.
+function solarIndex(radSumMJ, monthIndex0, cfg = MARKET) {
+  if (typeof radSumMJ !== 'number' || Number.isNaN(radSumMJ)) return null;
+  const max = cfg.SOLAR_MAX_BY_MONTH[monthIndex0] || 20;
+  return Math.min(1, Math.max(0, radSumMJ / max));
+}
+
+// Heating / cooling degree days from daily max+min (simple mean method).
+function degreeDays(tmax, tmin, cfg = MARKET) {
+  if (typeof tmax !== 'number' || typeof tmin !== 'number' ||
+      Number.isNaN(tmax) || Number.isNaN(tmin)) {
+    return { mean: null, hdd: null, cdd: null };
+  }
+  const mean = (tmax + tmin) / 2;
+  return {
+    mean: +mean.toFixed(1),
+    hdd: Math.max(0, +(cfg.HDD_BASE - mean).toFixed(1)),
+    cdd: Math.max(0, +(mean - cfg.CDD_BASE).toFixed(1))
+  };
+}
+
+// Pure: one city's Open-Meteo response -> per-day market metrics. No network.
+function parseMarketCity(raw, cfg = MARKET) {
+  if (!raw || !raw.daily || !Array.isArray(raw.daily.time)) return [];
+  const h = raw.hourly || {};
+  const hTime = Array.isArray(h.time) ? h.time : [];
+  const num = v => (typeof v === 'number' && !Number.isNaN(v)) ? v : null;
+  const dnum = (arr, i) => Array.isArray(arr) ? num(arr[i]) : null;
+
+  const days = [];
+  for (let di = 0; di < raw.daily.time.length; di++) {
+    const date = raw.daily.time[di];
+    const winds = [];
+    let stormy = false, fogMorning = false, snow = false, cloudSum = 0, cloudN = 0;
+    for (let i = 0; i < hTime.length; i++) {
+      if (typeof hTime[i] !== 'string' || hTime[i].slice(0, 10) !== date) continue;
+      const hr = parseInt(hTime[i].slice(11, 13), 10);
+      const w = num(Array.isArray(h.wind_speed_120m) ? h.wind_speed_120m[i] : null);
+      if (w !== null) winds.push(w);
+      const code = num(Array.isArray(h.weather_code) ? h.weather_code[i] : null);
+      if (code !== null) {
+        if (isStormCode(code)) stormy = true;
+        if ((code === 45 || code === 48) && hr >= 5 && hr <= 10) fogMorning = true;
+        if ((code >= 71 && code <= 77) || code === 85 || code === 86) snow = true;
+      }
+      if (hr >= 9 && hr <= 17) {
+        const c = num(Array.isArray(h.cloud_cover) ? h.cloud_cover[i] : null);
+        if (c !== null) { cloudSum += c; cloudN++; }
+      }
+    }
+    const tmax = dnum(raw.daily.temperature_2m_max, di);
+    const tmin = dnum(raw.daily.temperature_2m_min, di);
+    const radSum = dnum(raw.daily.shortwave_radiation_sum, di);
+    const monthIdx = parseInt(String(date).slice(5, 7), 10) - 1;
+    days.push({
+      date, tmax, tmin,
+      dd: degreeDays(tmax, tmin, cfg),
+      radSum,
+      solarIdx: solarIndex(radSum, monthIdx, cfg),
+      windMean: winds.length ? winds.reduce((a, b) => a + b, 0) / winds.length : null,
+      windIdx: windPowerIndex(winds, cfg.WIND),
+      gustMax: dnum(raw.daily.wind_gusts_10m_max, di),
+      precipSum: dnum(raw.daily.precipitation_sum, di),
+      cloudDaytimePct: cloudN ? Math.round(cloudSum / cloudN) : null,
+      stormy, fogMorning, snow
+    });
+  }
+  return days;
+}
+
+// Signal direction from a change in an index (percentage points) or degree days.
+function signalDir(delta, upAt, downAt) {
+  if (delta === null || delta === undefined || Number.isNaN(delta)) return null;
+  if (delta >= upAt) return 'up';
+  if (delta <= downAt) return 'down';
+  return 'flat';
+}
+
+// Pure: merge per-city days into one weighted country brief. No network.
+//   perCity: [{ city, weight, days: parseMarketCity() output }]
+function buildMarketBrief(countryCode, perCity, cfg = MARKET) {
+  const country = cfg.COUNTRIES[countryCode];
+  const valid = (perCity || []).filter(c => Array.isArray(c.days) && c.days.length);
+  if (!country || !valid.length) return null;
+  const nDays = Math.min(4, ...valid.map(c => c.days.length));
+
+  // Weighted average of one numeric field across cities for day index di.
+  const wAvg = (di, getter) => {
+    let sum = 0, w = 0;
+    for (const c of valid) {
+      const v = getter(c.days[di]);
+      if (typeof v === 'number' && !Number.isNaN(v)) { sum += v * c.weight; w += c.weight; }
+    }
+    return w > 0 ? sum / w : null;
+  };
+  const anyCity = (di, getter) => valid.filter(c => getter(c.days[di])).map(c => c.city);
+  const round1 = v => (v === null ? null : +v.toFixed(1));
+  const pct = v => (v === null ? null : Math.round(v * 100));
+
+  const days = [];
+  for (let di = 0; di < nDays; di++) {
+    const dd = { hdd: round1(wAvg(di, d => d.dd.hdd)), cdd: round1(wAvg(di, d => d.dd.cdd)) };
+    const risks = [];
+    const stormCities = anyCity(di, d => d.stormy);
+    if (stormCities.length) risks.push(`⛈ Thunderstorms (${stormCities.join(', ')})`);
+    const gust = Math.max(...valid.map(c => c.days[di].gustMax ?? -Infinity));
+    if (gust >= cfg.WIND.CUT_OUT) risks.push(`🌪 Gusts ${Math.round(gust)} km/h — turbine cut-out risk`);
+    else if (gust >= 70) risks.push(`💨 Strong gusts ${Math.round(gust)} km/h`);
+    if (anyCity(di, d => d.fogMorning).length) risks.push('🌫 Morning fog — late solar ramp');
+    if (anyCity(di, d => d.snow).length) risks.push('❄ Snow — PV soiling / load risk');
+    const tmax = round1(wAvg(di, d => d.tmax));
+    const tmin = round1(wAvg(di, d => d.tmin));
+    if (tmax !== null && tmax >= 30) risks.push(`🔥 Heat ${Math.round(tmax)}° — AC load, thermal derating`);
+    if (tmin !== null && tmin <= 0) risks.push(`🧊 Frost ${Math.round(tmin)}° — heating load`);
+    const precip = round1(wAvg(di, d => d.precipSum));
+    if (precip !== null && precip >= 15) risks.push(`🌧 Heavy rain ${Math.round(precip)} mm`);
+
+    days.push({
+      label: MARKET_LABELS[di] || `D+${di - 1}`,
+      date: valid[0].days[di].date,
+      context: di === 0, // yesterday: context only
+      tempMax: tmax, tempMin: tmin,
+      hdd: dd.hdd, cdd: dd.cdd,
+      solar: { sumMJ: round1(wAvg(di, d => d.radSum)),
+               index: pct(wAvg(di, d => d.solarIdx)),
+               cloudPct: Math.round(wAvg(di, d => d.cloudDaytimePct) ?? -1) >= 0
+                 ? Math.round(wAvg(di, d => d.cloudDaytimePct)) : null },
+      wind: { meanKmh: round1(wAvg(di, d => d.windMean)),
+              index: pct(wAvg(di, d => d.windIdx)),
+              gustMax: Number.isFinite(gust) ? Math.round(gust) : null },
+      risks,
+      signals: {}, headline: ''
+    });
+  }
+
+  // Day-over-day signals + plain-language headline (skip the context day).
+  for (let i = 1; i < days.length; i++) {
+    const prev = days[i - 1], day = days[i];
+    const sDelta = (day.solar.index !== null && prev.solar.index !== null)
+      ? day.solar.index - prev.solar.index : null;
+    const wDelta = (day.wind.index !== null && prev.wind.index !== null)
+      ? day.wind.index - prev.wind.index : null;
+    const ddNow = (day.hdd ?? 0) + (day.cdd ?? 0);
+    const ddPrev = (prev.hdd ?? 0) + (prev.cdd ?? 0);
+    const dDelta = (day.hdd === null && day.cdd === null) ? null : +(ddNow - ddPrev).toFixed(1);
+
+    day.signals = {
+      solar: signalDir(sDelta, 10, -10),
+      wind: signalDir(wDelta, 10, -10),
+      demand: signalDir(dDelta, 1.5, -1.5)
+    };
+
+    const bits = [];
+    if (sDelta !== null) {
+      bits.push(sDelta >= 10 ? `solar stronger (+${sDelta}pp)`
+        : sDelta <= -10 ? `solar weaker (${sDelta}pp)` : 'solar similar');
+    }
+    if (wDelta !== null) {
+      bits.push(wDelta >= 10 ? `wind up (+${wDelta}pp)`
+        : wDelta <= -10 ? `wind down (${wDelta}pp)` : 'wind similar');
+    }
+    if (dDelta !== null) {
+      const kind = (day.cdd ?? 0) > (day.hdd ?? 0) ? 'cooling' : 'heating';
+      bits.push(dDelta >= 1.5 ? `${kind} demand rising`
+        : dDelta <= -1.5 ? `${kind} demand easing` : 'demand steady');
+    }
+    day.headline = bits.length
+      ? bits.join(', ').replace(/^./, ch => ch.toUpperCase()) + '.'
+      : '';
+
+    // Net residual-load direction (renewable supply vs temperature demand).
+    const renew = (sDelta ?? 0) + (wDelta ?? 0);
+    if (sDelta === null && wDelta === null) day.net = '';
+    else if (renew >= 10 && (dDelta ?? 0) <= 0) day.net = 'More renewables into flat/lower demand → softer residual load.';
+    else if (renew <= -10 && (dDelta ?? 0) >= 0) day.net = 'Less sun/wind while demand holds/climbs → tighter residual load.';
+    else if (renew >= 10 && (dDelta ?? 0) > 1.5) day.net = 'Both renewables and demand up — watch the evening ramp.';
+    else if (renew <= -10 && (dDelta ?? 0) < -1.5) day.net = 'Renewables and demand both easing — direction unclear.';
+    else day.net = 'No big shift in fundamentals vs the previous day.';
+  }
+
+  return {
+    country: countryCode,
+    name: country.name,
+    timezone: country.tz,
+    cities: valid.map(c => `${c.city} (${c.weight})`),
+    days
+  };
+}
+
+// Fetch one city's raw market data (single Open-Meteo call).
+async function fetchMarketCity(city, tz) {
+  const hourly = 'temperature_2m,cloud_cover,shortwave_radiation,wind_speed_120m,precipitation,weather_code';
+  const daily = 'temperature_2m_max,temperature_2m_min,shortwave_radiation_sum,precipitation_sum,wind_gusts_10m_max,sunshine_duration,weather_code';
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${city.lat}&longitude=${city.lon}&hourly=${hourly}&daily=${daily}&past_days=1&forecast_days=3&timezone=${encodeURIComponent(tz)}&wind_speed_unit=kmh`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`Open-Meteo HTTP ${r.status}`);
+  const raw = await r.json();
+  if (raw.error) throw new Error(`Open-Meteo: ${raw.reason || 'error'}`);
+  return parseMarketCity(raw);
+}
+
+const marketCache = {};
+
+async function marketBrief(countryCode) {
+  const cached = marketCache[countryCode];
+  if (cached && (Date.now() - cached.ts) < MARKET.CACHE_MS) return cached.result;
+
+  const country = MARKET.COUNTRIES[countryCode];
+  if (!country) throw new Error(`Unknown country ${countryCode}`);
+
+  // Any single city failing just drops out of the weighted average.
+  const perCity = await Promise.all(country.cities.map(cc => {
+    const city = cities.find(c => c.name === cc.name);
+    if (!city) return { city: cc.name, weight: cc.weight, days: [] };
+    return fetchMarketCity(city, country.tz)
+      .then(days => ({ city: cc.name, weight: cc.weight, days }))
+      .catch(err => {
+        console.log(`Market fetch failed for ${cc.name}:`, err.message);
+        return { city: cc.name, weight: cc.weight, days: [] };
+      });
+  }));
+
+  const brief = buildMarketBrief(countryCode, perCity, MARKET);
+  if (!brief) throw new Error('No market data from any city');
+  const result = { generatedAt: new Date().toISOString(), ...brief };
+  marketCache[countryCode] = { result, ts: Date.now() };
   return result;
 }
 
@@ -844,7 +1292,7 @@ app.get('/api/cities', (req, res) => {
 // Get weather data for a city
 app.get('/api/weather/:city', async (req, res) => {
   const cityName = req.params.city;
-  
+
   // Check if city exists
   const city = cities.find(c => c.name === cityName);
   if (!city) {
@@ -853,7 +1301,7 @@ app.get('/api/weather/:city', async (req, res) => {
 
   // Try to get cached data first
   let cached = await getCachedWeather(cityName);
-  
+
   // If no cache or cache is older than 1 hour, fetch fresh data
   if (!cached || (Date.now() - new Date(cached.updatedAt).getTime()) > 3600000) {
     console.log(`Fetching fresh data for ${cityName}...`);
@@ -888,7 +1336,7 @@ app.get('/api/status', async (req, res) => {
     const result = await pool.query(`
       SELECT city_name, updated_at FROM weather_cache ORDER BY city_name
     `);
-    res.json({ 
+    res.json({
       cities: result.rows,
       totalCities: cities.length
     });
@@ -925,6 +1373,20 @@ app.get('/api/preparation/:city', async (req, res) => {
   }
 });
 
+// Live "right now" snapshot for a city (+ direction vs same hour yesterday)
+app.get('/api/live/:city', async (req, res) => {
+  const city = cities.find(c => c.name === req.params.city);
+  if (!city) {
+    return res.status(404).json({ error: 'City not found' });
+  }
+  try {
+    res.json(await fetchLive(city));
+  } catch (err) {
+    console.error(`Live fetch failed for ${req.params.city}:`, err.message);
+    res.status(500).json({ error: 'Could not fetch live data' });
+  }
+});
+
 // Cross-check today's shown values against independent models + MET Norway
 app.get('/api/crosscheck/:city', async (req, res) => {
   const city = cities.find(c => c.name === req.params.city);
@@ -939,20 +1401,35 @@ app.get('/api/crosscheck/:city', async (req, res) => {
   }
 });
 
-// Initialize and start
+// Market brief for a country (CZ or HU): demand / solar / wind / risks per day
+app.get('/api/market/:country', async (req, res) => {
+  const code = String(req.params.country || '').toUpperCase();
+  if (!MARKET.COUNTRIES[code]) {
+    return res.status(404).json({ error: 'Unknown country — use CZ or HU' });
+  }
+  try {
+    res.json(await marketBrief(code));
+  } catch (err) {
+    console.error(`Market brief failed for ${code}:`, err.message);
+    res.status(500).json({ error: 'Could not build market brief' });
+  }
+});
+
+// Initialize and start. initDB never throws (it degrades to memory-only), so
+// the server always comes up even when Postgres is down.
 async function start() {
   await initDB();
-  
+
   // Schedule fetch every 6 hours
   cron.schedule('0 */6 * * *', async () => {
     console.log('Running scheduled weather fetch...');
     await fetchAllCities();
   });
-  
+
   // Fetch on startup
   console.log('Fetching initial weather data...');
   await fetchAllCities();
-  
+
   app.listen(PORT, () => {
     console.log(`Weather app running on port ${PORT}`);
   });
@@ -967,5 +1444,8 @@ if (require.main === module) {
 module.exports = {
   getDateString, haversineKm, runDataChecks, APP_TIMEZONE, VERIFY,
   parsePreparation, buildNotes, classifyPressure, classifyWind, classifyClouds, describeWeather,
-  analyzeCrossCheck, localHourIndex, modelLabel, CROSSCHECK
+  analyzeCrossCheck, localHourIndex, modelLabel, CROSSCHECK,
+  parseLive, liveDir,
+  parseMarketCity, buildMarketBrief, windPowerAt, windPowerIndex, solarIndex,
+  degreeDays, signalDir, MARKET
 };

@@ -229,7 +229,7 @@
             .chart-panel {
                 padding: 15px;
             }
-            
+
             header h1 {
                 font-size: 1.5rem;
             }
@@ -466,6 +466,173 @@
         }
 
         .prep-legend .note { margin-top: 6px; color: #7f8ea3; }
+
+        /* LIVE tab */
+        table.live-table {
+            border-collapse: collapse;
+            width: 100%;
+            font-size: 0.9rem;
+            min-width: 640px;
+        }
+
+        table.live-table caption {
+            text-align: left;
+            color: #fff;
+            font-weight: 700;
+            font-size: 1.05rem;
+            margin-bottom: 12px;
+        }
+
+        table.live-table th,
+        table.live-table td {
+            padding: 12px 14px;
+            text-align: center;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        table.live-table thead th {
+            color: #4ecca3;
+            font-weight: 700;
+            background: rgba(15, 52, 96, 0.5);
+        }
+
+        /* Category headers carry the "what it means for the grid" tooltip. */
+        table.live-table thead th.cat {
+            cursor: help;
+            text-decoration: underline dotted rgba(255, 255, 255, 0.35);
+            text-underline-offset: 3px;
+        }
+
+        table.live-table th.city-label {
+            text-align: left;
+            color: #cfd8e3;
+            font-weight: 600;
+            background: #16213e;
+            white-space: nowrap;
+        }
+
+        .live-value { font-size: 1.4rem; font-weight: 700; color: #eaf2ff; display: block; line-height: 1.15; }
+        .live-change { font-size: 0.8rem; font-weight: 700; display: block; margin-top: 4px; }
+        .live-sub { font-size: 0.72rem; color: #9fb0c3; display: block; margin-top: 3px; }
+        .live-up { color: #ff9e6d; }   /* higher than yesterday */
+        .live-down { color: #6db6ff; } /* lower than yesterday */
+        .live-flat { color: #8fa3b8; }
+        .live-storm { color: #e9b44c; font-weight: 700; }
+        .live-updated { text-align: center; margin-top: 12px; font-size: 0.75rem; color: #7f8ea3; }
+
+        /* Market brief tab */
+        .market-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        @media (max-width: 1100px) {
+            .market-grid { grid-template-columns: 1fr; }
+        }
+
+        .market-card {
+            background: #16213e;
+            border-radius: 16px;
+            padding: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+
+        .market-card h2 {
+            color: #4ecca3;
+            font-size: 1.15rem;
+            margin-bottom: 4px;
+        }
+
+        .market-card .market-cities {
+            color: #7f8ea3;
+            font-size: 0.72rem;
+            margin-bottom: 14px;
+        }
+
+        table.market-table {
+            border-collapse: collapse;
+            width: 100%;
+            font-size: 0.85rem;
+            min-width: 520px;
+        }
+
+        table.market-table th,
+        table.market-table td {
+            padding: 9px 10px;
+            text-align: center;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            vertical-align: top;
+        }
+
+        table.market-table thead th {
+            color: #4ecca3;
+            font-weight: 700;
+            background: rgba(15, 52, 96, 0.5);
+        }
+
+        table.market-table thead th .col-date {
+            display: block; font-weight: 400; color: #8fa3b8; font-size: 0.7rem;
+        }
+
+        table.market-table thead th .col-day {
+            display: block; font-weight: 600; color: #7fd8bd; font-size: 0.7rem;
+        }
+
+        table.market-table th.row-label {
+            text-align: left;
+            color: #cfd8e3;
+            font-weight: 600;
+            background: #16213e;
+            white-space: nowrap;
+            cursor: help;
+            text-decoration: underline dotted rgba(255, 255, 255, 0.28);
+            text-underline-offset: 3px;
+        }
+
+        /* Yesterday column is context, not a trade signal */
+        table.market-table .ctx { opacity: 0.55; }
+
+        .mk-big { font-size: 1.15rem; font-weight: 700; color: #eaf2ff; display: block; line-height: 1.2; }
+        .mk-sub { font-size: 0.7rem; color: #9fb0c3; display: block; margin-top: 2px; }
+        .mk-dd  { display: inline-block; margin-top: 4px; padding: 1px 7px; border-radius: 999px;
+                  font-size: 0.68rem; font-weight: 700; }
+        .mk-dd.heat { background: rgba(109, 182, 255, 0.15); color: #6db6ff; }
+        .mk-dd.cool { background: rgba(255, 158, 109, 0.15); color: #ff9e6d; }
+        .mk-dd.none { background: rgba(150, 150, 150, 0.12); color: #8fa3b8; }
+
+        .mk-bar {
+            height: 8px; border-radius: 4px;
+            background: rgba(255, 255, 255, 0.08);
+            margin: 5px auto 0; max-width: 90px;
+            overflow: hidden;
+        }
+        .mk-bar > div { height: 100%; border-radius: 4px; }
+        .mk-bar.solar > div { background: #e9b44c; }
+        .mk-bar.wind  > div { background: #00CED1; }
+
+        .mk-arrow { font-weight: 700; font-size: 0.75rem; }
+        .mk-arrow.up { color: #4ecca3; }
+        .mk-arrow.down { color: #e94560; }
+        .mk-arrow.flat { color: #8fa3b8; }
+
+        .mk-risk { display: block; text-align: left; font-size: 0.72rem; color: #e6c98a;
+                   line-height: 1.4; }
+        .mk-ok { color: #4a5568; }
+
+        .mk-headline { text-align: left; font-size: 0.74rem; color: #cfd8e3; line-height: 1.4; }
+        .mk-net { display: block; margin-top: 4px; font-size: 0.7rem; color: #7fd8bd; font-style: italic; }
+
+        .market-legend {
+            margin-top: 14px;
+            font-size: 0.72rem;
+            color: #9fb0c3;
+            line-height: 1.6;
+            text-align: left;
+        }
+        .market-legend .disclaimer { color: #7f8ea3; font-style: italic; }
     </style>
 </head>
 <body>
@@ -484,6 +651,8 @@
             <button class="tab-btn" id="tabTable" onclick="showTab('table')">📋 Table</button>
             <button class="tab-btn" id="tabCzPrep" onclick="showTab('czprep')">CZ future</button>
             <button class="tab-btn" id="tabHuPrep" onclick="showTab('huprep')">HU future</button>
+            <button class="tab-btn" id="tabLive" onclick="showTab('live')">⚡ LIVE</button>
+            <button class="tab-btn" id="tabMarket" onclick="showTab('market')">📈 Market</button>
         </div>
 
       <div id="graphsView">
@@ -612,6 +781,20 @@
         </div>
       </div><!-- /huPrepView -->
 
+      <div id="liveView" style="display:none;">
+        <div class="table-panel">
+            <div class="table-scroll">
+                <div id="liveContainer"></div>
+            </div>
+            <div class="live-updated" id="liveUpdated"></div>
+        </div>
+      </div><!-- /liveView -->
+
+      <div id="marketView" style="display:none;">
+        <div class="market-grid" id="marketGrid"></div>
+        <div class="market-legend" id="marketLegend"></div>
+      </div><!-- /marketView -->
+
         <div class="status-bar" id="statusBar">
             Loading...
         </div>
@@ -643,6 +826,11 @@
             setupDropdowns();
             setupTable();
             setupLegends();
+            // Keep the LIVE tab fresh while it is the visible view.
+            setInterval(() => {
+                const v = document.getElementById('liveView');
+                if (v && v.style.display !== 'none') loadLive();
+            }, 5 * 60 * 1000);
             await Promise.all([
                 loadWeatherData('left', leftCity),
                 loadWeatherData('right', rightCity)
@@ -672,12 +860,12 @@
             const rightSelect = document.getElementById('rightCitySelect');
 
             // Czech cities on left (with Czechia average)
-            leftSelect.innerHTML = czechCities.map(city => 
+            leftSelect.innerHTML = czechCities.map(city =>
                 `<option value="${city}" ${city === leftCity ? 'selected' : ''}>${city}</option>`
             ).join('');
 
             // Other cities on right
-            rightSelect.innerHTML = otherCities.map(city => 
+            rightSelect.innerHTML = otherCities.map(city =>
                 `<option value="${city}" ${city === rightCity ? 'selected' : ''}>${city}</option>`
             ).join('');
 
@@ -692,18 +880,34 @@
             });
         }
 
-        // Calculate average of multiple city data
+        // Fetch JSON, treating HTTP errors and error payloads as failures so
+        // they can never end up cached or rendered as if they were data.
+        async function fetchJson(url) {
+            const res = await fetch(url);
+            if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+            return res.json();
+        }
+
+        // Shape check: is this a usable weather payload (not an error object)?
+        function isWeatherPayload(d) {
+            return !!(d && d.today && Array.isArray(d.today.temps));
+        }
+
+        // Calculate average of multiple city data (invalid entries are skipped)
         function calculateCzechiaAverage(citiesData) {
+            const valid = citiesData.filter(isWeatherPayload);
+            if (!valid.length) throw new Error('No valid city data for the Czechia average');
             const result = {
-                twoDaysAgo: { date: citiesData[0].twoDaysAgo.date, temps: [] },
-                yesterday: { date: citiesData[0].yesterday.date, temps: [] },
-                today: { date: citiesData[0].today.date, temps: [] },
-                todayForecast: { date: citiesData[0].today.date, temps: [] },
-                tomorrow: { date: citiesData[0].tomorrow.date, temps: [] },
-                dayAfterTomorrow: { date: citiesData[0].dayAfterTomorrow.date, temps: [] },
+                twoDaysAgo: { date: valid[0].twoDaysAgo.date, temps: [] },
+                yesterday: { date: valid[0].yesterday.date, temps: [] },
+                today: { date: valid[0].today.date, temps: [] },
+                todayForecast: { date: valid[0].today.date, temps: [] },
+                tomorrow: { date: valid[0].tomorrow.date, temps: [] },
+                dayAfterTomorrow: { date: valid[0].dayAfterTomorrow.date, temps: [] },
                 pastDaysAvg: { date: 'avg', temps: [] },
-                updatedAt: citiesData[0].updatedAt
+                updatedAt: valid[0].updatedAt
             };
+            citiesData = valid;
 
             // Calculate average for each hour
             for (let hour = 0; hour < 24; hour++) {
@@ -726,23 +930,24 @@
         // Fetch a city's weather data (handles the Czechia average + caching).
         // Shared by the graphs and the table so they always agree.
         async function fetchCityData(cityName) {
+            // Only ever cache validated payloads — a cached error object would
+            // keep breaking every render until the next manual refresh.
+            const getOne = async (city) => {
+                if (cityDataCache[city]) return cityDataCache[city];
+                const data = await fetchJson(`/api/weather/${encodeURIComponent(city)}`);
+                if (!isWeatherPayload(data)) throw new Error(`Bad weather payload for ${city}`);
+                cityDataCache[city] = data;
+                return data;
+            };
             if (cityName === 'Czechia') {
-                const citiesData = await Promise.all(
-                    czechCitiesForAverage.map(async (city) => {
-                        if (cityDataCache[city]) return cityDataCache[city];
-                        const res = await fetch(`/api/weather/${encodeURIComponent(city)}`);
-                        const cityData = await res.json();
-                        cityDataCache[city] = cityData;
-                        return cityData;
-                    })
-                );
+                // One failing city must not sink the whole average.
+                const settled = await Promise.allSettled(czechCitiesForAverage.map(getOne));
+                const citiesData = settled
+                    .filter(s => s.status === 'fulfilled')
+                    .map(s => s.value);
                 return calculateCzechiaAverage(citiesData);
             }
-            if (cityDataCache[cityName]) return cityDataCache[cityName];
-            const res = await fetch(`/api/weather/${encodeURIComponent(cityName)}`);
-            const data = await res.json();
-            cityDataCache[cityName] = data;
-            return data;
+            return getOne(cityName);
         }
 
         // Load weather data for a chart
@@ -836,24 +1041,77 @@
 
         // ---- Cross-check / confidence -------------------------------------
         // Compares the shown "today" values against independent Open-Meteo
-        // models + MET Norway (server /api/crosscheck). Flags hours where the
-        // shown value disagrees with the consensus, and marks them on the chart.
+        // models + MET Norway (server /api/crosscheck). Three outcomes:
+        //  - corrected: primary was the clear outlier against a TIGHT consensus
+        //    of the other sources -> the Today line shows the consensus median
+        //    at those hours (cyan ◆), raw value kept in the tooltip.
+        //  - suspect: primary disagrees but the other sources also disagree
+        //    among themselves -> flag only (amber ▲), value unchanged.
+        //  - agree: nothing to do.
 
-        // Remove any existing "low confidence" overlay from a chart.
+        // Remove overlays and restore the raw Today line.
         function removeFlagDataset(side) {
             const chart = side === 'left' ? leftChart : rightChart;
             if (!chart) return;
             const before = chart.data.datasets.length;
             chart.data.datasets = chart.data.datasets.filter(d => !d._flag);
-            if (chart.data.datasets.length !== before) chart.update();
+            const today = chart.data.datasets.find(d => d._isToday);
+            const hadPatch = !!(today && chart._rawToday);
+            if (hadPatch) today.data = chart._rawToday;
+            chart._rawToday = null;
+            chart._corrections = null;
+            if (chart.data.datasets.length !== before || hadPatch) chart.update();
         }
 
-        // Overlay warning markers on the Today line at flagged hours.
-        function applyFlagMarkers(side, data) {
+        // Apply cross-check results to a chart: substitute consensus values on
+        // the Today line where corrected, and mark suspect hours.
+        function applyCrossCheck(side, data) {
             const chart = side === 'left' ? leftChart : rightChart;
             if (!chart) return;
             chart.data.datasets = chart.data.datasets.filter(d => !d._flag);
+
+            const today = chart.data.datasets.find(d => d._isToday);
+            if (today && chart._rawToday) today.data = chart._rawToday; // re-apply cleanly
+            chart._rawToday = null;
+            chart._corrections = null;
+
+            const corrected = data.correctedHours || [];
             const flagged = data.suspectHours || [];
+
+            if (today && corrected.length) {
+                chart._rawToday = today.data;      // untouched original
+                const patched = today.data.slice(); // never mutate the cached raw array
+                const corrections = {};
+                corrected.forEach(h => {
+                    const row = data.hours[h];
+                    if (row && row.display !== null && row.display !== undefined) {
+                        corrections[h] = row.primary; // raw model value, for the tooltip
+                        patched[h] = row.display;
+                    }
+                });
+                today.data = patched;
+                chart._corrections = corrections;
+
+                const pts = Array(24).fill(null);
+                corrected.forEach(h => {
+                    const row = data.hours[h];
+                    if (row) pts[h] = row.display;
+                });
+                chart.data.datasets.push({
+                    _flag: true,
+                    label: '🛠 Consensus value',
+                    data: pts,
+                    showLine: false,
+                    pointStyle: 'rectRot',
+                    pointRadius: 7,
+                    pointHoverRadius: 9,
+                    pointBackgroundColor: '#00CED1',
+                    pointBorderColor: '#1a1a2e',
+                    pointBorderWidth: 1,
+                    order: 0,
+                });
+            }
+
             if (flagged.length) {
                 const pts = Array(24).fill(null);
                 flagged.forEach(h => {
@@ -892,8 +1150,7 @@
 
             setBadge(key, 'checking', '⏳ Cross-checking…', '', '');
             try {
-                const res = await fetch(`/api/crosscheck/${encodeURIComponent(cityName)}`);
-                const data = await res.json();
+                const data = await fetchJson(`/api/crosscheck/${encodeURIComponent(cityName)}`);
 
                 if (!data || !Array.isArray(data.hours) || !data.sourceCount) {
                     setBadge(key, 'error', 'Cross-check unavailable', '',
@@ -902,11 +1159,13 @@
                     return;
                 }
 
-                applyFlagMarkers(side, data);
+                applyCrossCheck(side, data);
+                const corrected = data.correctedHours || [];
                 const flagged = data.suspectHours || [];
                 const srcList = (data.sources || []).join(', ');
+                const hh = h => `${String(h).padStart(2, '0')}:00`;
 
-                if (!flagged.length) {
+                if (!flagged.length && !corrected.length) {
                     const html =
                         `<div class="vd-row vd-pass">✓ Today's values agree with ${data.sourceCount} independent source(s) within ${data.deviationLimit}°C.</div>` +
                         `<div class="vd-row vd-skip" style="margin-top:6px;">Sources: ${srcList}. Click the badge to hide.</div>`;
@@ -916,14 +1175,28 @@
                 }
 
                 let html = '';
+                corrected.forEach(h => {
+                    const row = data.hours[h];
+                    const others = (row.others || []).map(o => `${o.label} ${o.temp.toFixed(1)}°`).join(', ');
+                    html += `<div class="vd-row vd-pass">🛠 ${hh(h)} — model showed <b>${row.primary.toFixed(1)}°</b>; ` +
+                        `${row.others.length} other sources sit within ${row.spread.toFixed(1)}°C of each other, so the chart shows their median <b>${row.display.toFixed(1)}°</b> (${others})</div>`;
+                });
                 flagged.forEach(h => {
                     const row = data.hours[h];
                     const others = (row.others || []).map(o => `${o.label} ${o.temp.toFixed(1)}°`).join(', ');
-                    html += `<div class="vd-row vd-fail">⚠ ${String(h).padStart(2, '0')}:00 — shown <b>${row.primary.toFixed(1)}°</b>, others median ${row.median.toFixed(1)}° (${others})</div>`;
+                    html += `<div class="vd-row vd-fail">⚠ ${hh(h)} — shown <b>${row.primary.toFixed(1)}°</b> vs others' median ${row.median.toFixed(1)}°, but the sources also disagree among themselves (spread ${row.spread.toFixed(1)}°C) — flagged, not replaced (${others})</div>`;
                 });
-                html += `<div class="vd-row vd-skip" style="margin-top:6px;">Flagged when the shown value differs from the median of the others by more than ${data.deviationLimit}°C. Sources: ${srcList}. Click the badge to hide.</div>`;
-                setBadge(key, 'warning', `⚠ ${flagged.length} hr low-confidence`, html,
-                    'Shown values disagree with independent sources at these hours');
+                html += `<div class="vd-row vd-skip" style="margin-top:6px;">` +
+                    `Replaced when the model is >${data.deviationLimit}°C from the median of ≥${data.consensusMinSources || 3} sources that agree within ${data.consensusSpreadLimit || 2}°C; ` +
+                    `flagged only when the sources disagree too. Raw model values stay in the tooltip. Sources: ${srcList}. Click the badge to hide.</div>`;
+
+                const parts = [];
+                if (corrected.length) parts.push(`🛠 ${corrected.length} hr → consensus`);
+                if (flagged.length) parts.push(`⚠ ${flagged.length} hr flagged`);
+                setBadge(key, 'warning', parts.join(' · '), html,
+                    corrected.length
+                        ? 'Model outlier(s) replaced by the consensus of independent sources — click for details'
+                        : 'Shown values disagree with independent sources at these hours');
             } catch (e) {
                 console.error('Cross-check failed:', e);
                 setBadge(key, 'error', 'Cross-check unavailable', '', 'Could not cross-check right now');
@@ -1153,6 +1426,251 @@
                 `<div class="note">Source: Open-Meteo for ${cfg.capital} (used as the ${country} proxy). Generated ${when}.</div>`;
         }
 
+        // ---- LIVE tab -----------------------------------------------------
+        // "Right now" for four cities across four categories, each with the
+        // current value and a ▲/▼ vs the same hour yesterday. Category headers
+        // carry a hover tooltip explaining what the metric means for the grid.
+
+        const LIVE_CITIES = ['Prague', 'Brno', 'Budapest', 'Debrecen'];
+
+        const LIVE_CATS = [
+            {
+                key: 'temperature', label: '🌡️ Temperature',
+                tip: 'Grid load driver: heat raises cooling/AC demand and lowers line, transformer and solar-panel efficiency; cold raises heating demand. Big moves shift both demand and price.',
+                fmt: v => `${v.toFixed(1)}°C`
+            },
+            {
+                key: 'wind', label: '💨 Wind',
+                tip: 'Wind-power driver: more wind = more generation, until turbines cut out around 90+ km/h. Strong gusts also raise line-fault and trip risk.',
+                fmt: v => `${Math.round(v)} km/h`
+            },
+            {
+                key: 'rain', label: '🌧️ Rain / Storms',
+                tip: 'Rain and cloud cut solar (FVE) output; thunderstorms bring lightning faults, trips and sudden supply/demand swings. Heavy rain feeds hydro.',
+                fmt: v => `${v.toFixed(1)} mm`
+            },
+            {
+                key: 'pressure', label: '🎚️ Pressure',
+                tip: 'Weather-regime proxy: high = calm, clear, stable (low wind, high solar); low/falling = windy, cloudy, unsettled (high wind, low solar). The trend hints what is coming.',
+                fmt: v => `${Math.round(v)} hPa`
+            },
+        ];
+
+        // The "▲ +N / ▼ -N / ▬" change indicator vs the same hour yesterday.
+        function liveChange(m) {
+            if (!m || m.delta === null || m.delta === undefined) {
+                return '<span class="live-change live-flat">– no comparison</span>';
+            }
+            const arrow = m.dir === 'up' ? '▲' : (m.dir === 'down' ? '▼' : '▬');
+            const cls = m.dir === 'up' ? 'live-up' : (m.dir === 'down' ? 'live-down' : 'live-flat');
+            const sign = m.delta > 0 ? '+' : '';
+            return `<span class="live-change ${cls}">${arrow} ${sign}${m.delta}</span>`;
+        }
+
+        function liveCell(cat, m) {
+            if (!m || m.value === null || m.value === undefined) {
+                return '<span class="live-value">—</span>';
+            }
+            let html = `<span class="live-value">${cat.fmt(m.value)}</span>`;
+            html += liveChange(m);
+            if (cat.key === 'wind' && m.gust !== null && m.gust !== undefined) {
+                html += `<span class="live-sub">gust ${Math.round(m.gust)}</span>`;
+            }
+            if (cat.key === 'rain') {
+                const w = m.weather || '';
+                html += `<span class="live-sub ${m.storm ? 'live-storm' : ''}">${w}${m.storm ? ' ⛈️' : ''}</span>`;
+            }
+            return html;
+        }
+
+        function renderLive(results) {
+            const head = LIVE_CATS.map(cat =>
+                `<th class="cat" title="${cat.tip}">${cat.label}</th>`).join('');
+
+            let rows = '';
+            let latest = null;
+            results.forEach(({ city, data }) => {
+                rows += `<tr><th class="city-label">${city}</th>`;
+                if (!data || data.error) {
+                    rows += `<td colspan="4" style="color:#8fa3b8;">— unavailable</td></tr>`;
+                    return;
+                }
+                if (data.generatedAt) latest = data.generatedAt;
+                LIVE_CATS.forEach(cat => { rows += `<td>${liveCell(cat, data[cat.key])}</td>`; });
+                rows += `</tr>`;
+            });
+
+            document.getElementById('liveContainer').innerHTML = `
+                <table class="live-table">
+                    <caption>Live conditions — now vs the same hour yesterday (▲ higher, ▼ lower). Hover a category for its grid meaning.</caption>
+                    <thead><tr><th class="city-label">City</th>${head}</tr></thead>
+                    <tbody>${rows}</tbody>
+                </table>`;
+
+            const when = latest ? new Date(latest).toLocaleString() : '';
+            document.getElementById('liveUpdated').textContent =
+                when ? `Updated ${when} — auto-refreshes every 5 min while this tab is open.` : '';
+        }
+
+        async function loadLive() {
+            const container = document.getElementById('liveContainer');
+            if (!container.innerHTML.trim()) {
+                container.innerHTML = '<div style="color:#8fa3b8;padding:10px;">Loading live data…</div>';
+            }
+            try {
+                const results = await Promise.all(LIVE_CITIES.map(c =>
+                    fetch(`/api/live/${encodeURIComponent(c)}`)
+                        .then(r => r.json())
+                        .then(d => ({ city: c, data: d }))
+                        .catch(() => ({ city: c, data: null }))
+                ));
+                renderLive(results);
+            } catch (e) {
+                console.error('Error loading live data:', e);
+                container.innerHTML = '<div class="error">Could not load live data.</div>';
+            }
+        }
+
+        // ---- Market brief (CZ + HU) ----------------------------------------
+        // One card per country: what the weather means for power fundamentals
+        // (demand, solar, wind, risks) for Today / Tomorrow / D+2, with
+        // Yesterday shown dimmed as context. Data: /api/market/:country.
+
+        const MARKET_TIPS = {
+            demand: 'Population-weighted temperature across the country’s cities. HDD = heating degree days (how far the daily mean sits below 18°C → heating demand). CDD = cooling degree days (above 21°C → AC demand). Bigger number = more temperature-driven load.',
+            solar:  'Daily solar energy total (MJ/m²), normalised 0–100% against a clear-sky maximum for this month. Higher = more FVE generation. The arrow compares with the previous day.',
+            wind:   'Hourly wind at ~120 m hub height pushed through a simplified turbine power curve (cut-in 11, rated 43, cut-out 90 km/h), averaged over the day, 0–100%. Higher = more wind generation.',
+            risks:  'Grid-relevant weather hazards: storms, cut-out-level gusts, morning fog (late solar ramp), snow, heat, frost, heavy rain.',
+            signal: 'Plain-language day-over-day read of the fundamentals, plus the implied direction of residual load (demand minus renewables). Fundamentals only — not price advice.',
+        };
+
+        function mkArrow(dir) {
+            if (dir === 'up') return '<span class="mk-arrow up">▲</span>';
+            if (dir === 'down') return '<span class="mk-arrow down">▼</span>';
+            if (dir === 'flat') return '<span class="mk-arrow flat">▬</span>';
+            return '';
+        }
+
+        function mkBar(kind, pct) {
+            if (pct === null || pct === undefined) return '';
+            const w = Math.max(0, Math.min(100, pct));
+            return `<div class="mk-bar ${kind}"><div style="width:${w}%"></div></div>`;
+        }
+
+        function mkDemandCell(d) {
+            if (d.tempMax === null && d.tempMin === null) return '<span class="mk-big">—</span>';
+            let html = `<span class="mk-big">${d.tempMax === null ? '—' : Math.round(d.tempMax) + '°'}</span>`;
+            html += `<span class="mk-sub">min ${d.tempMin === null ? '—' : Math.round(d.tempMin) + '°'}</span>`;
+            const hdd = d.hdd || 0, cdd = d.cdd || 0;
+            if (cdd > hdd && cdd > 0) html += `<span class="mk-dd cool">CDD ${cdd.toFixed(1)} · cooling</span>`;
+            else if (hdd > 0) html += `<span class="mk-dd heat">HDD ${hdd.toFixed(1)} · heating</span>`;
+            else html += `<span class="mk-dd none">mild</span>`;
+            return html;
+        }
+
+        function mkSolarCell(d) {
+            const s = d.solar || {};
+            if (s.index === null || s.index === undefined) return '<span class="mk-big">—</span>';
+            let html = `<span class="mk-big">${s.index}% ${mkArrow((d.signals || {}).solar)}</span>`;
+            html += mkBar('solar', s.index);
+            const bits = [];
+            if (s.sumMJ !== null && s.sumMJ !== undefined) bits.push(`${Math.round(s.sumMJ)} MJ/m²`);
+            if (s.cloudPct !== null && s.cloudPct !== undefined) bits.push(`clouds ${s.cloudPct}%`);
+            if (bits.length) html += `<span class="mk-sub">${bits.join(' · ')}</span>`;
+            return html;
+        }
+
+        function mkWindCell(d) {
+            const w = d.wind || {};
+            if (w.index === null || w.index === undefined) return '<span class="mk-big">—</span>';
+            let html = `<span class="mk-big">${w.index}% ${mkArrow((d.signals || {}).wind)}</span>`;
+            html += mkBar('wind', w.index);
+            const bits = [];
+            if (w.meanKmh !== null && w.meanKmh !== undefined) bits.push(`⌀ ${Math.round(w.meanKmh)} km/h @120m`);
+            if (w.gustMax !== null && w.gustMax !== undefined) bits.push(`gust ${w.gustMax}`);
+            if (bits.length) html += `<span class="mk-sub">${bits.join(' · ')}</span>`;
+            return html;
+        }
+
+        function mkRiskCell(d) {
+            const risks = d.risks || [];
+            if (!risks.length) return '<span class="mk-ok">— none</span>';
+            return risks.map(r => `<span class="mk-risk">${r}</span>`).join('');
+        }
+
+        function mkSignalCell(d) {
+            if (d.context) return '<span class="mk-ok">(context day)</span>';
+            if (!d.headline) return '<span class="mk-ok">—</span>';
+            let html = `<div class="mk-headline">${d.headline}`;
+            if (d.net) html += `<span class="mk-net">${d.net}</span>`;
+            return html + '</div>';
+        }
+
+        function renderMarketCard(data) {
+            const days = data.days || [];
+            const head = days.map(d => {
+                const wd = weekdayName(d.date);
+                return `<th class="${d.context ? 'ctx' : ''}">${d.label}` +
+                    `<span class="col-date">${d.date || ''}</span>` +
+                    (wd ? `<span class="col-day">${wd}</span>` : '') + `</th>`;
+            }).join('');
+
+            const row = (label, tip, cellFn) => {
+                let r = `<th class="row-label" title="${tip}">${label}</th>`;
+                days.forEach(d => { r += `<td class="${d.context ? 'ctx' : ''}">${cellFn(d)}</td>`; });
+                return `<tr>${r}</tr>`;
+            };
+
+            return `
+                <div class="market-card">
+                    <h2>${data.country === 'CZ' ? '🇨🇿' : '🇭🇺'} ${data.name}</h2>
+                    <div class="market-cities">Population-weighted: ${(data.cities || []).join(', ')} (millions)</div>
+                    <div class="table-scroll">
+                        <table class="market-table">
+                            <thead><tr><th class="row-label">Fundamentals</th>${head}</tr></thead>
+                            <tbody>
+                                ${row('🌡️ Demand', MARKET_TIPS.demand, mkDemandCell)}
+                                ${row('☀️ Solar (FVE)', MARKET_TIPS.solar, mkSolarCell)}
+                                ${row('💨 Wind gen', MARKET_TIPS.wind, mkWindCell)}
+                                ${row('⚠️ Risks', MARKET_TIPS.risks, mkRiskCell)}
+                                ${row('🧭 Signal', MARKET_TIPS.signal, mkSignalCell)}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>`;
+        }
+
+        async function loadMarket() {
+            const grid = document.getElementById('marketGrid');
+            if (!grid.innerHTML.trim()) {
+                grid.innerHTML = '<div style="color:#8fa3b8;padding:10px;">Loading market brief…</div>';
+            }
+            try {
+                const results = await Promise.all(['CZ', 'HU'].map(c =>
+                    fetchJson(`/api/market/${c}`).catch(e => {
+                        console.error(`Market ${c} failed:`, e);
+                        return null;
+                    })
+                ));
+                const cards = results.filter(Boolean).map(renderMarketCard);
+                if (!cards.length) {
+                    grid.innerHTML = '<div class="error">Could not load the market brief.</div>';
+                    document.getElementById('marketLegend').innerHTML = '';
+                    return;
+                }
+                grid.innerHTML = cards.join('');
+                const when = results.find(Boolean).generatedAt;
+                document.getElementById('marketLegend').innerHTML =
+                    '<strong>How to read this:</strong> ▲/▼ compare each day with the previous one. ' +
+                    'Solar % = share of a clear-sky day this month; Wind % = simplified turbine output at ~120 m hub height. ' +
+                    'HDD/CDD = heating/cooling degree days from the population-weighted city mean. Hover row labels for details. ' +
+                    `<div class="disclaimer">Weather fundamentals from Open-Meteo only — not a price forecast and not trading advice. Generated ${when ? new Date(when).toLocaleString() : ''}.</div>`;
+            } catch (e) {
+                console.error('Error loading market brief:', e);
+                grid.innerHTML = '<div class="error">Could not load the market brief.</div>';
+            }
+        }
+
         // ---- Tabs ---------------------------------------------------------
 
         const VIEWS = {
@@ -1160,6 +1678,8 @@
             table:  { view: 'tableView',  tab: 'tabTable' },
             czprep: { view: 'czPrepView', tab: 'tabCzPrep' },
             huprep: { view: 'huPrepView', tab: 'tabHuPrep' },
+            live:   { view: 'liveView',   tab: 'tabLive' },
+            market: { view: 'marketView', tab: 'tabMarket' },
         };
 
         function showTab(tab) {
@@ -1172,14 +1692,16 @@
             if (tab === 'table') loadTable();
             if (tab === 'czprep') loadPreparation('CZ');
             if (tab === 'huprep') loadPreparation('HU');
+            if (tab === 'live') loadLive();
+            if (tab === 'market') loadMarket();
         }
 
         // Update status bar
         function updateStatus(updatedAt) {
-            const lastUpdate = updatedAt 
-                ? new Date(updatedAt).toLocaleString() 
+            const lastUpdate = updatedAt
+                ? new Date(updatedAt).toLocaleString()
                 : 'Unknown';
-            document.getElementById('statusBar').textContent = 
+            document.getElementById('statusBar').textContent =
                 `Last updated: ${lastUpdate}`;
         }
 
@@ -1188,10 +1710,10 @@
             const btn = document.querySelector('.refresh-btn');
             btn.textContent = '⏳ Fetching...';
             btn.disabled = true;
-            
+
             // Clear cache
             cityDataCache = {};
-            
+
             try {
                 await fetch('/api/fetch', { method: 'POST' });
                 await Promise.all([
@@ -1202,6 +1724,8 @@
                 if (document.getElementById('tableView').style.display !== 'none') loadTable();
                 if (document.getElementById('czPrepView').style.display !== 'none') loadPreparation('CZ');
                 if (document.getElementById('huPrepView').style.display !== 'none') loadPreparation('HU');
+                if (document.getElementById('liveView').style.display !== 'none') loadLive();
+                if (document.getElementById('marketView').style.display !== 'none') loadMarket();
             } catch (err) {
                 console.error('Error refreshing data:', err);
                 alert('Error refreshing data. Try again.');
@@ -1308,9 +1832,9 @@
         function renderChart(side, cityName, data) {
             const canvasId = side === 'left' ? 'leftChart' : 'rightChart';
             const ctx = document.getElementById(canvasId).getContext('2d');
-            
+
             const hours = Array.from({length: 24}, (_, i) => `${i.toString().padStart(2, '0')}:00`);
-            
+
             // Destroy existing chart
             if (side === 'left' && leftChart) {
                 leftChart.destroy();
@@ -1381,6 +1905,7 @@
                         },
                         {
                             // Today - solid thick green
+                            _isToday: true, // cross-check corrections target this line
                             label: `Today (${data.today.date})`,
                             data: data.today.temps,
                             borderColor: '#4ecca3',
@@ -1461,7 +1986,16 @@
                             callbacks: {
                                 label: function(context) {
                                     if (context.parsed.y !== null) {
-                                        return `${context.dataset.label}: ${context.parsed.y.toFixed(1)}°C`;
+                                        let txt = `${context.dataset.label}: ${context.parsed.y.toFixed(1)}°C`;
+                                        // On consensus-corrected hours, keep the raw model value visible.
+                                        const corr = context.chart._corrections;
+                                        if (corr && context.dataset._isToday && corr[context.dataIndex] !== undefined) {
+                                            const raw = corr[context.dataIndex];
+                                            txt += raw === null || raw === undefined
+                                                ? ' (consensus fill)'
+                                                : ` (consensus — model showed ${raw.toFixed(1)}°)`;
+                                        }
+                                        return txt;
                                     }
                                     return null;
                                 }
