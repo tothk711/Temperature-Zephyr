@@ -138,6 +138,70 @@ result as a badge. Thresholds live in the `VERIFY` object in `server.js`:
 
 ---
 
+## Data stability (provisional history)
+
+**Recent "past" days are provisional and can change between refreshes.** This is expected
+behaviour of the data source + caching design, not a data error. Two effects combine:
+
+1. **The forecast endpoint does not return final observations for past days.** Open‑Meteo's
+   `/v1/forecast` (used for the charts) returns continuously re‑analysed *model* data for
+   recent past days; newer model runs fold in more observations, so a past day's curve gets
+   revised over time. Only the ERA5 `/v1/archive` endpoint is a stable record, and it lags
+   **~5 days** — so "yesterday" and "2 days ago" are always provisional.
+2. **The app overwrites its whole cache every cycle.** `fetchWeatherFromAPI` always requests
+   `past_days=8`, and `cacheWeatherData` replaces the entire per‑city record
+   (`ON CONFLICT … DO UPDATE SET data = …`). There is no per‑day freezing, so each 6‑hourly
+   refresh replaces stored history with the model's latest hindcast.
+
+Net effect: an already‑happened day can read a few degrees differently than it did when it
+was "today", especially in volatile weather (heatwaves, storms). Note also that comparing a
+**forecast** line for a date (e.g. "Tomorrow") against the **actual** for that same date later
+is just normal forecast error, not revision.
+
+The built‑in verification badge cross‑checks the three oldest historic days against the ERA5
+archive. If they drift beyond the `VERIFY` thresholds the badge turns amber
+("Check flagged issues") and its detail line quantifies the difference.
+
+> **If immutable history is required** (not currently implemented): freeze each day's values
+> once it is in the past (write‑once for past days, keep updating today + forecast), and/or
+> source days older than ~5 days from the ERA5 archive endpoint instead of the forecast
+> endpoint.
+
+---
+
+## Cross-check / confidence
+
+A single weather model can occasionally produce an unrealistic value for one hour (e.g. a
+sudden multi‑degree drop that is really a model artefact). To catch these, the app
+cross‑checks the value it shows for **today** (Open‑Meteo `best_match`) against several
+**independent** sources and flags — but never alters — hours that disagree:
+
+- Other individual Open‑Meteo models: **ECMWF**, **DWD ICON**, **NOAA GFS**, **Météo‑France**
+  (each fetched with `&models=<id>`, so the response is a plain `temperature_2m`).
+- **MET Norway** (`api.met.no`) — a completely separate provider / agency.
+
+For each hour, if the shown value differs from the **median of the other sources** by more
+than `CROSSCHECK.DEVIATION_C` (default **4 °C**) it is flagged. A confidence badge next to
+each graph summarises the result ("✓ Sources agree" / "⚠ N hr low‑confidence"), the detail
+panel lists each flagged hour with the per‑source numbers, and the flagged hours are marked
+with ⚠ triangles on the Today line. Genuine rapid changes that *all* sources agree on are
+deliberately **not** flagged, so real fronts/storms are not false‑flagged.
+
+Example independent‑source URLs for Budapest:
+
+```
+# One Open-Meteo model (repeat per model id in CROSSCHECK.MODELS)
+https://api.open-meteo.com/v1/forecast?latitude=47.5&longitude=19.04&hourly=temperature_2m&models=ecmwf_ifs025&forecast_days=2&timezone=Europe%2FPrague
+
+# MET Norway (requires a User-Agent header — see METNO_USER_AGENT)
+https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=47.5&lon=19.04
+```
+
+> Cross‑check runs on individual cities; the Czechia average is skipped. The model list and
+> threshold live in the `CROSSCHECK` object in `server.js`.
+
+---
+
 ## API
 
 | Method | Route | Description |
@@ -148,6 +212,7 @@ result as a badge. Thresholds live in the `VERIFY` object in `server.js`:
 | `GET`  | `/api/status` | Cache status (per‑city `updated_at`) |
 | `GET`  | `/api/verify/:city` | Run/return the data‑verification checks |
 | `GET`  | `/api/preparation/:city` | 5‑day "future" overview for a capital |
+| `GET`  | `/api/crosscheck/:city` | Cross‑check today's shown values vs independent models + MET Norway |
 
 ---
 
@@ -169,6 +234,7 @@ Set the following environment variables (e.g. in a `.env` or your host's config)
 |----------|----------|---------|-------------|
 | `DATABASE_URL` | Yes (for caching) | — | PostgreSQL connection string |
 | `PORT` | No | `3000` | HTTP port |
+| `METNO_USER_AGENT` | Recommended | generic | Identifies your app to MET Norway for the cross‑check. Put a real contact, e.g. `TemperatureZephyr/1.0 you@example.com` — MET Norway blocks missing/generic User‑Agents |
 
 ### Run
 ```bash
@@ -189,10 +255,21 @@ fetches all cities, and schedules a refresh every 6 hours.
 | Verification thresholds | `VERIFY` |
 | Refresh schedule | `cron.schedule('0 */6 * * *', …)` |
 | Cache freshness (API) | 1 hour (in `/api/weather/:city`) |
+| Cross‑check models, threshold, User‑Agent | `CROSSCHECK` |
 
 ---
 
 ## Changelog
+
+### July 2026 — data trust
+- **Cross‑check / confidence.** Today's shown values are now compared against independent
+  Open‑Meteo models (ECMWF, DWD ICON, NOAA GFS, Météo‑France) and MET Norway. Hours that
+  disagree with the consensus by more than 4 °C are flagged with a confidence badge, a
+  detail panel, and ⚠ markers on the chart. Data is never altered, and changes all sources
+  agree on are not flagged. Adds the `/api/crosscheck/:city` route and the
+  `METNO_USER_AGENT` env var.
+- **Documented provisional history** — added the "Data stability" section explaining why
+  recent past days can change between refreshes.
 
 ### June 2026 — maintenance & feature pass
 - **Pinned the Chart.js CDN versions** (`chart.js@4.5.1`, `chartjs-plugin-annotation@3.1.0`).

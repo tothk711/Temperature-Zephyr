@@ -97,6 +97,7 @@
             align-items: center;
             gap: 10px;
             margin-bottom: 15px;
+            flex-wrap: wrap;
         }
 
         .chart-header label {
@@ -493,8 +494,10 @@
                     <label for="leftCitySelect">City:</label>
                     <select id="leftCitySelect"></select>
                     <span class="verify-badge checking" id="leftVerify" onclick="toggleDetails('left')">⏳ Checking…</span>
+                    <span class="verify-badge checking" id="leftConfidence" onclick="toggleDetails('leftcc')">⏳ Cross-check…</span>
                 </div>
                 <div class="verify-details" id="leftVerifyDetails"></div>
+                <div class="verify-details" id="leftConfidenceDetails"></div>
                 <div class="chart-wrapper">
                     <canvas id="leftChart"></canvas>
                 </div>
@@ -536,8 +539,10 @@
                     <label for="rightCitySelect">City:</label>
                     <select id="rightCitySelect"></select>
                     <span class="verify-badge checking" id="rightVerify" onclick="toggleDetails('right')">⏳ Checking…</span>
+                    <span class="verify-badge checking" id="rightConfidence" onclick="toggleDetails('rightcc')">⏳ Cross-check…</span>
                 </div>
                 <div class="verify-details" id="rightVerifyDetails"></div>
+                <div class="verify-details" id="rightConfidenceDetails"></div>
                 <div class="chart-wrapper">
                     <canvas id="rightChart"></canvas>
                 </div>
@@ -747,6 +752,7 @@
                 renderChart(side, cityName, data);
                 updateStatus(data.updatedAt);
                 loadVerification(side, cityName); // runs in the background
+                loadCrossCheck(side, cityName);   // runs in the background
             } catch (err) {
                 console.error(`Error loading weather data for ${cityName}:`, err);
             }
@@ -759,6 +765,8 @@
                 left:  ['leftVerify', 'leftVerifyDetails'],
                 right: ['rightVerify', 'rightVerifyDetails'],
                 table: ['tableVerify', 'tableVerifyDetails'],
+                leftcc:  ['leftConfidence', 'leftConfidenceDetails'],
+                rightcc: ['rightConfidence', 'rightConfidenceDetails'],
             };
             const [b, d] = map[side];
             return { badge: document.getElementById(b), details: document.getElementById(d) };
@@ -823,6 +831,103 @@
             } catch (e) {
                 console.error('Verification failed:', e);
                 setBadge(side, 'error', 'Check unavailable', '', 'Could not verify data right now');
+            }
+        }
+
+        // ---- Cross-check / confidence -------------------------------------
+        // Compares the shown "today" values against independent Open-Meteo
+        // models + MET Norway (server /api/crosscheck). Flags hours where the
+        // shown value disagrees with the consensus, and marks them on the chart.
+
+        // Remove any existing "low confidence" overlay from a chart.
+        function removeFlagDataset(side) {
+            const chart = side === 'left' ? leftChart : rightChart;
+            if (!chart) return;
+            const before = chart.data.datasets.length;
+            chart.data.datasets = chart.data.datasets.filter(d => !d._flag);
+            if (chart.data.datasets.length !== before) chart.update();
+        }
+
+        // Overlay warning markers on the Today line at flagged hours.
+        function applyFlagMarkers(side, data) {
+            const chart = side === 'left' ? leftChart : rightChart;
+            if (!chart) return;
+            chart.data.datasets = chart.data.datasets.filter(d => !d._flag);
+            const flagged = data.suspectHours || [];
+            if (flagged.length) {
+                const pts = Array(24).fill(null);
+                flagged.forEach(h => {
+                    const row = data.hours[h];
+                    pts[h] = (row && row.primary !== null && row.primary !== undefined) ? row.primary : null;
+                });
+                chart.data.datasets.push({
+                    _flag: true,
+                    label: '⚠ Low confidence',
+                    data: pts,
+                    showLine: false,
+                    pointStyle: 'triangle',
+                    pointRadius: 8,
+                    pointHoverRadius: 10,
+                    pointBackgroundColor: '#e9b44c',
+                    pointBorderColor: '#1a1a2e',
+                    pointBorderWidth: 1,
+                    order: 0,
+                });
+            }
+            chart.update();
+        }
+
+        async function loadCrossCheck(side, cityName) {
+            if (side !== 'left' && side !== 'right') return;
+            const key = side + 'cc';
+
+            // The Czechia line is an average of four cities — cross-check runs on
+            // individual cities, so show a neutral note there.
+            if (cityName === 'Czechia') {
+                setBadge(key, 'error', '🔀 Cross-check: single cities', '',
+                    'Cross-check runs on individual cities, not the Czechia average');
+                removeFlagDataset(side);
+                return;
+            }
+
+            setBadge(key, 'checking', '⏳ Cross-checking…', '', '');
+            try {
+                const res = await fetch(`/api/crosscheck/${encodeURIComponent(cityName)}`);
+                const data = await res.json();
+
+                if (!data || !Array.isArray(data.hours) || !data.sourceCount) {
+                    setBadge(key, 'error', 'Cross-check unavailable', '',
+                        'No independent sources responded');
+                    removeFlagDataset(side);
+                    return;
+                }
+
+                applyFlagMarkers(side, data);
+                const flagged = data.suspectHours || [];
+                const srcList = (data.sources || []).join(', ');
+
+                if (!flagged.length) {
+                    const html =
+                        `<div class="vd-row vd-pass">✓ Today's values agree with ${data.sourceCount} independent source(s) within ${data.deviationLimit}°C.</div>` +
+                        `<div class="vd-row vd-skip" style="margin-top:6px;">Sources: ${srcList}. Click the badge to hide.</div>`;
+                    setBadge(key, 'ok', '✓ Sources agree', html,
+                        'Independent models + MET Norway agree with the shown values');
+                    return;
+                }
+
+                let html = '';
+                flagged.forEach(h => {
+                    const row = data.hours[h];
+                    const others = (row.others || []).map(o => `${o.label} ${o.temp.toFixed(1)}°`).join(', ');
+                    html += `<div class="vd-row vd-fail">⚠ ${String(h).padStart(2, '0')}:00 — shown <b>${row.primary.toFixed(1)}°</b>, others median ${row.median.toFixed(1)}° (${others})</div>`;
+                });
+                html += `<div class="vd-row vd-skip" style="margin-top:6px;">Flagged when the shown value differs from the median of the others by more than ${data.deviationLimit}°C. Sources: ${srcList}. Click the badge to hide.</div>`;
+                setBadge(key, 'warning', `⚠ ${flagged.length} hr low-confidence`, html,
+                    'Shown values disagree with independent sources at these hours');
+            } catch (e) {
+                console.error('Cross-check failed:', e);
+                setBadge(key, 'error', 'Cross-check unavailable', '', 'Could not cross-check right now');
+                removeFlagDataset(side);
             }
         }
 

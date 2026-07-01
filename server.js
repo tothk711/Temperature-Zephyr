@@ -240,10 +240,13 @@ async function fetchAllCities() {
     await new Promise(resolve => setTimeout(resolve, 500));
   }
 
-  // The underlying data just changed, so drop any cached verification results
-  // (defined further down) to force a fresh check on the next request.
+  // The underlying data just changed, so drop any cached verification and
+  // cross-check results (defined further down) to force a fresh check next time.
   if (typeof verifyCache === 'object') {
     Object.keys(verifyCache).forEach(k => delete verifyCache[k]);
+  }
+  if (typeof crossCheckCache === 'object') {
+    Object.keys(crossCheckCache).forEach(k => delete crossCheckCache[k]);
   }
 
   console.log('Finished fetching weather data for all cities');
@@ -653,6 +656,180 @@ async function fetchPreparation(city) {
   return result;
 }
 
+// ---------------------------------------------------------------------------
+// Cross-check / confidence
+//
+// A single weather model can produce an unrealistic value for an hour (e.g. a
+// sudden multi-degree drop that turns out to be a model artefact). To catch
+// this we compare the value the app actually shows for TODAY (Open-Meteo's
+// default "best_match" model) against several independent sources:
+//   - other individual Open-Meteo models (ECMWF, DWD ICON, NOAA GFS, Météo-France)
+//   - MET Norway (a completely separate provider / different agency)
+// If the shown value disagrees with the consensus (median) of the others by
+// more than a threshold, that hour is flagged as low-confidence. We NEVER change
+// the data — only flag it. The pure comparison (analyzeCrossCheck) does no
+// network I/O and is unit tested.
+// ---------------------------------------------------------------------------
+
+const CROSSCHECK = {
+  // Open-Meteo model ids fetched one-per-call (so the response is always plain
+  // `temperature_2m`, no suffix guessing). Any id a location doesn't return is
+  // skipped automatically, so an unknown/renamed id is harmless.
+  MODELS: ['ecmwf_ifs025', 'icon_seamless', 'gfs_seamless', 'meteofrance_seamless'],
+  DEVIATION_C: 4,     // shown value vs median of the others, before flagging
+  MIN_SOURCES: 2,     // need at least this many other sources to judge an hour
+  CACHE_MS: 60 * 60 * 1000,
+  // MET Norway requires a User-Agent identifying your app + contact. Override
+  // via env so you can put a real contact address (per met.no terms of service).
+  METNO_UA: process.env.METNO_USER_AGENT || 'TemperatureZephyr/1.0 (weather cross-check; set METNO_USER_AGENT)'
+};
+
+const MODEL_LABELS = {
+  ecmwf_ifs025: 'ECMWF', ecmwf_ifs04: 'ECMWF', icon_seamless: 'DWD ICON',
+  gfs_seamless: 'NOAA GFS', meteofrance_seamless: 'Météo-France', ukmo_seamless: 'UK Met Office'
+};
+function modelLabel(id) { return MODEL_LABELS[id] || id; }
+
+// Map a UTC ISO instant to a "today-local" hour index 0..23 in `tz`, or null if
+// it does not fall on `todayLocal` (YYYY-MM-DD). Lets us line up MET Norway's
+// UTC timestamps with the app's Europe/Prague hours.
+function localHourIndex(utcIso, tz, todayLocal) {
+  const d = new Date(utcIso);
+  if (Number.isNaN(d.getTime())) return null;
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', hour12: false
+  }).formatToParts(d);
+  const get = t => (parts.find(p => p.type === t) || {}).value;
+  const date = `${get('year')}-${get('month')}-${get('day')}`;
+  if (date !== todayLocal) return null;
+  let hh = parseInt(get('hour'), 10);
+  if (hh === 24) hh = 0; // some ICU builds report midnight as 24
+  return (hh >= 0 && hh <= 23) ? hh : null;
+}
+
+// Pure: compare shown values against other sources, hour by hour. No network.
+//   primary : number[24]         best_match "today" (may contain nulls)
+//   sources : { label: number[24] }  other models / providers
+function analyzeCrossCheck(primary, sources, cfg = CROSSCHECK) {
+  const labels = Object.keys(sources || {});
+  const prim = Array.isArray(primary) ? primary : [];
+  const hours = [];
+  const suspectHours = [];
+  for (let h = 0; h < 24; h++) {
+    const others = [];
+    for (const lbl of labels) {
+      const v = sources[lbl] && sources[lbl][h];
+      if (typeof v === 'number' && !Number.isNaN(v)) others.push({ label: lbl, temp: v });
+    }
+    const p = (typeof prim[h] === 'number' && !Number.isNaN(prim[h])) ? prim[h] : null;
+    let median = null, min = null, max = null, spread = null, deviation = null, suspect = false;
+    if (others.length) {
+      const vals = others.map(o => o.temp).sort((a, b) => a - b);
+      const mid = Math.floor(vals.length / 2);
+      median = vals.length % 2 ? vals[mid] : (vals[mid - 1] + vals[mid]) / 2;
+      min = vals[0]; max = vals[vals.length - 1]; spread = max - min;
+      if (p !== null && others.length >= cfg.MIN_SOURCES) {
+        deviation = Math.abs(p - median);
+        suspect = deviation > cfg.DEVIATION_C;
+      }
+    }
+    if (suspect) suspectHours.push(h);
+    hours.push({ hour: h, primary: p, others, median, min, max, spread, deviation, suspect });
+  }
+  return { hours, suspectHours, sourceCount: labels.length, sources: labels };
+}
+
+// Fetch one Open-Meteo model's today temps as a 24-slot local-hour array, or null.
+async function fetchModelTemps(city, model) {
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${city.lat}&longitude=${city.lon}&hourly=temperature_2m&models=${model}&forecast_days=2&timezone=Europe%2FPrague`;
+  try {
+    const r = await fetch(url);
+    if (!r.ok) return null;
+    const j = await r.json();
+    if (j.error || !j.hourly || !Array.isArray(j.hourly.time) || !Array.isArray(j.hourly.temperature_2m)) return null;
+    const today = getDateString(0);
+    const day = Array(24).fill(null);
+    let any = false;
+    for (let i = 0; i < j.hourly.time.length; i++) {
+      const t = j.hourly.time[i];
+      if (typeof t !== 'string' || t.slice(0, 10) !== today) continue;
+      const hh = parseInt(t.slice(11, 13), 10);
+      const v = j.hourly.temperature_2m[i];
+      if (typeof v === 'number' && !Number.isNaN(v) && hh >= 0 && hh <= 23) { day[hh] = v; any = true; }
+    }
+    return any ? day : null;
+  } catch (e) {
+    console.log(`Model ${model} cross-check fetch failed for ${city.name}:`, e.message);
+    return null;
+  }
+}
+
+// Fetch MET Norway (a fully independent provider) today temps as a 24-slot array.
+async function fetchMetno(city) {
+  const url = `https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=${city.lat}&lon=${city.lon}`;
+  try {
+    const r = await fetch(url, { headers: { 'User-Agent': CROSSCHECK.METNO_UA, 'Accept': 'application/json' } });
+    if (!r.ok) return null;
+    const j = await r.json();
+    const series = j && j.properties && j.properties.timeseries;
+    if (!Array.isArray(series)) return null;
+    const today = getDateString(0);
+    const day = Array(24).fill(null);
+    let any = false;
+    for (const pt of series) {
+      const temp = pt && pt.data && pt.data.instant && pt.data.instant.details
+        ? pt.data.instant.details.air_temperature : null;
+      if (typeof temp !== 'number' || Number.isNaN(temp)) continue;
+      const hh = localHourIndex(pt.time, APP_TIMEZONE, today);
+      if (hh === null) continue;
+      day[hh] = temp; any = true;
+    }
+    return any ? day : null;
+  } catch (e) {
+    console.log(`MET Norway cross-check fetch failed for ${city.name}:`, e.message);
+    return null;
+  }
+}
+
+const crossCheckCache = {};
+
+// Cross-check one city's shown "today" values against the independent sources.
+async function crossCheckCity(city) {
+  const cached = crossCheckCache[city.name];
+  if (cached && (Date.now() - cached.ts) < CROSSCHECK.CACHE_MS) return cached.result;
+
+  // Primary = what the app actually shows for today (best_match), from cache.
+  let weather = await getCachedWeather(city.name);
+  if (!weather) {
+    const fresh = await fetchWeatherFromAPI(city);
+    if (fresh) { await cacheWeatherData(city.name, fresh); weather = { data: fresh }; }
+  }
+  const primary = (weather && weather.data && weather.data.today && Array.isArray(weather.data.today.temps))
+    ? weather.data.today.temps : Array(24).fill(null);
+
+  // Gather independent sources in parallel; any failure just drops that source.
+  const jobs = CROSSCHECK.MODELS.map(m => fetchModelTemps(city, m).then(day => ({ label: modelLabel(m), day })));
+  jobs.push(fetchMetno(city).then(day => ({ label: 'MET Norway', day })));
+  const results = await Promise.all(jobs);
+
+  const sources = {};
+  for (const { label, day } of results) if (day && !sources[label]) sources[label] = day;
+
+  const analysis = analyzeCrossCheck(primary, sources, CROSSCHECK);
+  const result = {
+    city: city.name,
+    generatedAt: new Date().toISOString(),
+    timezone: APP_TIMEZONE,
+    deviationLimit: CROSSCHECK.DEVIATION_C,
+    ...analysis,
+    status: analysis.sourceCount === 0 ? 'unavailable'
+          : (analysis.suspectHours.length ? 'warning' : 'ok')
+  };
+  crossCheckCache[city.name] = { result, ts: Date.now() };
+  return result;
+}
+
 // Middleware
 app.use(express.json());
 app.use(express.static('public'));
@@ -748,6 +925,20 @@ app.get('/api/preparation/:city', async (req, res) => {
   }
 });
 
+// Cross-check today's shown values against independent models + MET Norway
+app.get('/api/crosscheck/:city', async (req, res) => {
+  const city = cities.find(c => c.name === req.params.city);
+  if (!city) {
+    return res.status(404).json({ error: 'City not found' });
+  }
+  try {
+    res.json(await crossCheckCity(city));
+  } catch (err) {
+    console.error(`Cross-check failed for ${req.params.city}:`, err.message);
+    res.status(500).json({ error: 'Cross-check failed' });
+  }
+});
+
 // Initialize and start
 async function start() {
   await initDB();
@@ -775,5 +966,6 @@ if (require.main === module) {
 
 module.exports = {
   getDateString, haversineKm, runDataChecks, APP_TIMEZONE, VERIFY,
-  parsePreparation, buildNotes, classifyPressure, classifyWind, classifyClouds, describeWeather
+  parsePreparation, buildNotes, classifyPressure, classifyWind, classifyClouds, describeWeather,
+  analyzeCrossCheck, localHourIndex, modelLabel, CROSSCHECK
 };
