@@ -102,17 +102,16 @@ test('medianSeries: per-timestamp median on the first grid, junk ignored', () =>
   assert.equal(m.values[2], 30);   // only one real value
 });
 
-test('MEDIAN_MODELS covers all six implemented sources', () => {
-  assert.deepEqual(s.MEDIAN_MODELS, [
-    'best_match', 'ecmwf_ifs025', 'icon_seamless',
-    'gfs_seamless', 'meteofrance_seamless', 'metno_seamless'
-  ]);
+test('MEDIAN_MODELS matches the History source list', () => {
+  assert.deepEqual(s.MEDIAN_MODELS, s.HISTORY.SOURCES.map(x => x.id));
 });
 
-test('HISTORY config lists all six implemented sources', () => {
+test('HISTORY config lists the five sources with coverage here', () => {
+  // metno_seamless was removed in v1.4.1: no coverage for these cities, so
+  // requesting it only burned Open-Meteo rate-limit budget.
   assert.deepEqual(s.HISTORY.SOURCES.map(x => x.id), [
     'best_match', 'ecmwf_ifs025', 'icon_seamless',
-    'gfs_seamless', 'meteofrance_seamless', 'metno_seamless'
+    'gfs_seamless', 'meteofrance_seamless'
   ]);
 });
 

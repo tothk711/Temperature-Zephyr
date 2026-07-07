@@ -1,6 +1,6 @@
 {
   "name": "weather-comparison",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Weather temperature comparison app",
   "main": "server.js",
   "scripts": {

@@ -1,0 +1,5 @@
+Temperature Zephyr — frozen snapshot "Versions/1.0"
+App version: 1.4.1 (see README changelog)
+Frozen: 2026-07-07
+Status: verified working (14 unit tests, 17 e2e checks vs mocked API)
+Run it: npm install && npm start

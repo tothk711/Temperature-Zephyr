@@ -57,11 +57,12 @@ function valFor(varName, dayIndex, hour, shift) {
 
 function openMeteoPayload(u) {
   const q = u.searchParams;
-  const model = q.get('models');
-  if (model === 'metno_seamless') {
+  const modelsParam = q.get('models');
+  const models = modelsParam ? modelsParam.split(',') : null;
+  if (models && models.length === 1 && models[0] === 'metno_seamless') {
     return { status: 400, body: { error: true, reason: 'No data is available for this location' } };
   }
-  const shift = (model && MODEL_SHIFT[model] !== undefined) ? MODEL_SHIFT[model] : 0;
+  const shiftOf = m => (m && MODEL_SHIFT[m] !== undefined) ? MODEL_SHIFT[m] : 0;
   const days = datesFromQuery(q);
   const payload = {
     latitude: Number(q.get('latitude')), longitude: Number(q.get('longitude')),
@@ -72,7 +73,16 @@ function openMeteoPayload(u) {
     days.forEach(d => { for (let h = 0; h < 24; h++) time.push(`${d}T${String(h).padStart(2, '0')}:00`); });
     payload.hourly = { time };
     q.get('hourly').split(',').forEach(v => {
-      payload.hourly[v] = time.map((t, i) => valFor(v, Math.floor(i / 24), i % 24, shift));
+      if (models && models.length > 1) {
+        // Real API: several models -> per-model suffixed arrays; a model
+        // without coverage (metno) contributes no array at all.
+        models.forEach(m => {
+          if (m === 'metno_seamless') return;
+          payload.hourly[`${v}_${m}`] = time.map((t, i) => valFor(v, Math.floor(i / 24), i % 24, shiftOf(m)));
+        });
+      } else {
+        payload.hourly[v] = time.map((t, i) => valFor(v, Math.floor(i / 24), i % 24, shiftOf(models ? models[0] : null)));
+      }
     });
   }
   if (q.get('daily')) {
@@ -96,7 +106,14 @@ function openMeteoPayload(u) {
   return { status: 200, body: payload };
 }
 
+let mockCallCount = 0;
+process.on('SIGTERM', () => {
+  console.log(`[mock-fetch] total upstream calls: ${mockCallCount}`);
+  process.exit(0);
+});
+
 global.fetch = async (url) => {
+  mockCallCount++;
   const u = new URL(String(url));
   let out;
   if (u.hostname === 'api.met.no') {

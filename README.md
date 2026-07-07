@@ -295,6 +295,32 @@ fetches all cities, and schedules a refresh every 6 hours.
 
 ## Changelog
 
+### v1.4.1 — July 2026 — rate-limit fix (the "everything broke" release)
+v1.4.0's Global‑median fetched **one model per call** — up to 12 requests per city — and
+promptly tripped Open‑Meteo's rate limits on `api.open-meteo.com`. Since Market, LIVE,
+the future tabs and History weeks ≥ current−1 all share that host, they all failed at
+once (archive‑served weeks kept working, which is how the culprit was found), and
+"Refresh All Data" hung on stalled connections. Fixes:
+
+- **Batched model requests.** Median weather is now **2 calls** per city (forecast +
+  previous‑runs, all models in one `models=a,b,c` request, suffixed variables parsed);
+  History median is **1 call**. `metno_seamless` was dropped from the model lists — it has
+  no coverage for any of our cities, so it only burned quota (the real MET Norway API is
+  still used by the cross‑check).
+- **15‑second timeout on every upstream request** (`tFetch`) — nothing can hang a route,
+  or "Refresh All Data", for minutes any more. The refresh also fetches all cities in
+  parallel instead of sequentially with delays.
+- **Stale‑over‑error everywhere.** Preparation, History, LIVE and Market now serve the
+  last good result when a fresh fetch fails, instead of blanking the tab.
+- **In‑flight coalescing** for median weather (the Czechia average asks for 4 cities at
+  once; simultaneous requests for the same city now share one fetch).
+- **Version snapshots.** Working releases are frozen into `Versions/<n>/` folders
+  (git‑ignored). `Versions/1.0/` = this release. If the app misbehaves after a change,
+  run the snapshot instead and compare.
+
+Note: if Open‑Meteo's **daily** quota was exhausted by the incident, some tabs may stay
+degraded until the quota resets at midnight UTC — the app now survives that gracefully.
+
 ### v1.4.0 — July 2026 — median everywhere, forecasts in History, Dec buttons
 - **Graphs: Source dropdown.** Global median (default) or Openmeteo, feeding **all** lines
   including the Czechia average and the previous‑run "Today Forecast" series. Median data

@@ -1,10 +1,32 @@
 # Temperature Zephyr — Handoff Note
 
-**Date:** 2026-07-07 · **Current version:** 1.4.0 (main folder) · **Baseline:** 1.0.0 (`Temperature1.0/` — see note below)
+**Date:** 2026-07-07 · **Current version:** 1.4.1 (main folder) · **Snapshot:** `Versions/1.0/` · **Baseline:** 1.0.0 (`Temperature1.0/` — see note below)
 
 A weather/temperature dashboard for Central European cities, used to support energy /
 power‑trading decisions (solar "FVE" output, wind generation, grid load). Node + Express
 backend, PostgreSQL cache, single‑file Chart.js front‑end, all data from Open‑Meteo.
+
+---
+
+## v1.4.1 addendum (2026-07-07) — incident + fix
+
+**Incident:** v1.4.0 rate-limited us out of `api.open-meteo.com` (per-model median calls,
+up to 12/city). Market, LIVE, prep, and History weeks on the forecast endpoint all failed;
+archive-hosted weeks (≤ current−2) kept working — that asymmetry identified the cause.
+
+**Fixes:** batched `models=a,b,c` requests (median weather 12→2 calls, History median
+6→1), suffixed-variable parsing (`extractModelSeries` / `fetchHistoryBatch`), metno
+dropped from Open-Meteo model lists (no coverage here — pure quota waste), 15 s
+`tFetch` timeout on every upstream call, parallel `fetchAllCities`, stale-over-error in
+prep/History/LIVE/Market, in-flight coalescing for median.
+
+**Versioning (new convention):** frozen snapshots live in `Versions/<n>/` inside the main
+folder (git-ignored). `Versions/1.0/` = v1.4.1, the first known-good snapshot. To freeze
+the next good state: copy everything except `node_modules/`, `.git/` and `Versions/`
+into `Versions/<n+1>/`. To run a snapshot: `cd Versions/1.0 && npm install && npm start`.
+
+**If tabs are still degraded today:** the incident may have exhausted the daily
+Open-Meteo quota; it resets at midnight UTC. The app now serves stale data meanwhile.
 
 ---
 
