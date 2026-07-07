@@ -1,10 +1,39 @@
 # Temperature Zephyr — Handoff Note
 
-**Date:** 2026-07-02 · **Current version:** 1.2.0 (main folder) · **Baseline:** 1.0.0 (`Temperature1.0/` — see note below)
+**Date:** 2026-07-07 · **Current version:** 1.3.0 (main folder) · **Baseline:** 1.0.0 (`Temperature1.0/` — see note below)
 
 A weather/temperature dashboard for Central European cities, used to support energy /
 power‑trading decisions (solar "FVE" output, wind generation, grid load). Node + Express
 backend, PostgreSQL cache, single‑file Chart.js front‑end, all data from Open‑Meteo.
+
+---
+
+## v1.3.0 addendum (2026-07-07)
+
+What changed in this round (details in README → Changelog → v1.3.0):
+
+- **📖 History tab** — city + ISO week (1 → current) + source dropdowns; 24×7 table of
+  actual past hourly temperatures. `GET /api/history/:city?week=N&source=openmeteo|median`.
+  "Global median" = per-hour median of ECMWF / DWD ICON / NOAA GFS / Météo-France /
+  MET Norway / Open-Meteo, fetched one model per call with automatic skipping (MET Norway
+  has no coverage for CZ/HU — expect 5 contributing sources there; the API response's
+  `sources` array tells you what was used). Finished weeks read the historical-forecast
+  archive; recent weeks read the forecast endpoint's `past_days`. Future hours are null by
+  design — the tab never shows forecasts.
+- **CZ/HU future tabs** — now 6 days (Today → D+5) and five temperature rows
+  (8:00 / 12:00 / 16:00 / 20:00 / 0:00). Tab labels are now flag emojis **🇨🇿 / 🇭🇺** with a
+  pinned Twemoji country-flags subset font (unicode-range–limited) so they render on
+  Windows too; graceful fallback to "CZ"/"HU" letters if the CDN is unreachable.
+- **Tests** — the `tests/` folder referenced by `npm test` was missing from the repo; it
+  now exists with offline unit tests for the new pure helpers plus `tests/mock-fetch.js`
+  (a preload that fakes Open-Meteo/MET Norway so the app can be booted end-to-end without
+  network: `node --require ./tests/mock-fetch.js server.js`).
+- **Verified offline** — `node --check` on everything, unit tests green, and a mocked
+  end-to-end boot: `/`, `/api/preparation/*` (6 days, h12/h20), `/api/history/*` (both
+  sources, past + current week, validation errors) all returned sane payloads. A **live
+  smoke test is still required** (this build environment has no network access — same as
+  the 1.1/1.2 handoffs): after deploy open the 📖 History tab and check a past week with
+  both sources, and `GET /api/history/Prague?week=1&source=median` for the archive path.
 
 ---
 
@@ -122,9 +151,11 @@ The pure/testable helpers in `server.js` are exported at the bottom (`getDateStr
 - **Graphs** — two charts (Czech cities incl. a Czechia average; other cities). Legends are
   **clickable** to hide/show lines (state persists across city changes).
 - **Table** — the same series numerically, every 4 hours.
-- **CZ future / HU future** — 5‑day outlook per country (Prague/Budapest as proxies) with
-  temp/pressure/wind/weather/clouds/solar and auto notes. Column headers show **label / date /
-  weekday**.
+- **🇨🇿 future / 🇭🇺 future** — 6‑day outlook per country (Prague/Budapest as proxies) with
+  temp at 8/12/16/20/0 h, pressure/wind/weather/clouds/solar and auto notes. Column headers
+  show **label / date / weekday**.
+- **📖 History** — city + week (ISO, 1 → current) + source dropdowns; 24×7 grid of actual
+  past hourly temperatures (Openmeteo best_match, or Global median of all sources).
 - **⚡ LIVE** — right‑now snapshot for Prague, Brno, Budapest, Debrecen across Temperature,
   Wind, Rain/Storms, Pressure. Each shows the current value + **▲/▼/▬ vs the same hour
   yesterday**. Hover a category header for its **grid meaning**. Auto‑refreshes every 5 min.
@@ -141,6 +172,7 @@ The pure/testable helpers in `server.js` are exported at the bottom (`getDateStr
 | `GET /api/preparation/:city` | 5‑day country outlook |
 | `GET /api/crosscheck/:city` | Today vs independent models + MET Norway (flags outliers) |
 | `GET /api/live/:city` | Right‑now snapshot + direction vs yesterday |
+| `GET /api/history/:city?week=N&source=openmeteo\|median` | Hour‑by‑hour actual temps for one ISO week |
 
 ## Config knobs (all in `server.js`)
 

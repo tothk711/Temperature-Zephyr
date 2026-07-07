@@ -9,6 +9,19 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.1.0/dist/chartjs-plugin-annotation.min.js"></script>
     <style>
+        /* Country-flag emoji glyphs. Windows ships no native flag emoji font
+           (Chrome/Edge there render 🇨🇿 as the letters "CZ"), so flags use this
+           tiny Twemoji subset font from the same pinned CDN as Chart.js above.
+           unicode-range limits it strictly to flag codepoints — every other
+           character keeps the system font. If the CDN is unreachable, the
+           tabs degrade gracefully to the letters CZ / HU. */
+        @font-face {
+            font-family: 'Twemoji Country Flags';
+            unicode-range: U+1F1E6-1F1FF, U+1F3F4, U+E0062-E0063, U+E0065, U+E0067, U+E006C, U+E006E, U+E0073-E0074, U+E0077, U+E007F;
+            src: url('https://cdn.jsdelivr.net/npm/country-flag-emoji-polyfill@0.1.8/dist/TwemojiCountryFlags.woff2') format('woff2');
+            font-display: swap;
+        }
+
         * {
             margin: 0;
             padding: 0;
@@ -16,7 +29,7 @@
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            font-family: 'Twemoji Country Flags', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
             background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
             color: #eee;
             min-height: 100vh;
@@ -649,8 +662,9 @@
         <div class="tabs">
             <button class="tab-btn active" id="tabGraphs" onclick="showTab('graphs')">📊 Graphs</button>
             <button class="tab-btn" id="tabTable" onclick="showTab('table')">📋 Table</button>
-            <button class="tab-btn" id="tabCzPrep" onclick="showTab('czprep')">CZ future</button>
-            <button class="tab-btn" id="tabHuPrep" onclick="showTab('huprep')">HU future</button>
+            <button class="tab-btn" id="tabCzPrep" onclick="showTab('czprep')">🇨🇿 future</button>
+            <button class="tab-btn" id="tabHuPrep" onclick="showTab('huprep')">🇭🇺 future</button>
+            <button class="tab-btn" id="tabHistory" onclick="showTab('history')">📖 History</button>
             <button class="tab-btn" id="tabLive" onclick="showTab('live')">⚡ LIVE</button>
             <button class="tab-btn" id="tabMarket" onclick="showTab('market')">📈 Market</button>
         </div>
@@ -781,6 +795,23 @@
         </div>
       </div><!-- /huPrepView -->
 
+      <div id="historyView" style="display:none;">
+        <div class="table-panel">
+            <div class="table-controls">
+                <label for="historyCitySelect">City:</label>
+                <select id="historyCitySelect"></select>
+                <label for="historyWeekSelect">Week:</label>
+                <select id="historyWeekSelect"></select>
+                <label for="historySourceSelect">Source:</label>
+                <select id="historySourceSelect"></select>
+            </div>
+            <div class="table-scroll">
+                <div id="historyContainer"></div>
+            </div>
+            <div class="prep-legend" id="historyLegend"></div>
+        </div>
+      </div><!-- /historyView -->
+
       <div id="liveView" style="display:none;">
         <div class="table-panel">
             <div class="table-scroll">
@@ -825,6 +856,7 @@
             updateTodayDate();
             setupDropdowns();
             setupTable();
+            setupHistory();
             setupLegends();
             // Keep the LIVE tab fresh while it is the visible view.
             setInterval(() => {
@@ -1277,8 +1309,8 @@
         // ---- Preparation (CZ / HU) ----------------------------------------
 
         const PREP_CONFIG = {
-            CZ: { capital: 'Prague',   container: 'czPrepContainer', legend: 'czPrepLegend' },
-            HU: { capital: 'Budapest', container: 'huPrepContainer', legend: 'huPrepLegend' },
+            CZ: { capital: 'Prague',   container: 'czPrepContainer', legend: 'czPrepLegend', flag: '🇨🇿' },
+            HU: { capital: 'Budapest', container: 'huPrepContainer', legend: 'huPrepLegend', flag: '🇭🇺' },
         };
 
         // Hover explanations for each category (shown as native tooltips).
@@ -1401,11 +1433,13 @@
 
             document.getElementById(cfg.container).innerHTML = `
                 <table class="prep-table">
-                    <caption>${country} (${cfg.capital}) — 5-day overview</caption>
-                    <thead><tr><th class="row-label">${country} (${cfg.capital})</th>${head}</tr></thead>
+                    <caption>${cfg.flag} ${country} (${cfg.capital}) — 6-day overview</caption>
+                    <thead><tr><th class="row-label">${cfg.flag} ${country} (${cfg.capital})</th>${head}</tr></thead>
                     <tbody>
                         ${tempRow('🌡️ Temp 8:00', 'h8', PREP_TIPS.temp)}
+                        ${tempRow('🌡️ Temp 12:00', 'h12', PREP_TIPS.temp)}
                         ${tempRow('🌡️ Temp 16:00', 'h16', PREP_TIPS.temp)}
+                        ${tempRow('🌡️ Temp 20:00', 'h20', PREP_TIPS.temp)}
                         ${tempRow('🌡️ Temp 0:00', 'h0', PREP_TIPS.tempNight)}
                         ${textRow('🎚️ Pressure', d => d.pressure.class, PREP_TIPS.pressure)}
                         ${textRow('💨 Wind', d => d.wind.class, PREP_TIPS.wind)}
@@ -1424,6 +1458,133 @@
                 '<span class="swatch swing-r"></span> lower' +
                 '<span class="swatch swing-dr"></span> much lower' +
                 `<div class="note">Source: Open-Meteo for ${cfg.capital} (used as the ${country} proxy). Generated ${when}.</div>`;
+        }
+
+        // ---- History tab ----------------------------------------------------
+        // Hour-by-hour ACTUAL past temperatures for one city and one ISO week
+        // (Mon–Sun) of this year, from /api/history. Source is either
+        // Open-Meteo's best_match alone ("Openmeteo") or the per-hour median
+        // of all implemented sources ("Global median"). Hours that have not
+        // happened yet are blank — this tab never shows forecast values.
+
+        const HISTORY_CITIES = [...czechCitiesForAverage, ...otherCities];
+        const HISTORY_SOURCES = [
+            { id: 'openmeteo', label: 'Openmeteo' },
+            { id: 'median',    label: 'Global median' },
+        ];
+        let historyCity = 'Prague';
+        let historyWeek = null;      // set in setupHistory()
+        let historySource = 'openmeteo';
+
+        // ISO week number (Monday-first) of a 'YYYY-MM-DD' string — the same
+        // algorithm as the server's isoWeekOf, kept in lockstep.
+        function isoWeekOfStr(dateStr) {
+            const [y, m, d] = dateStr.split('-').map(Number);
+            const dt = new Date(Date.UTC(y, m - 1, d));
+            const dow = (dt.getUTCDay() + 6) % 7;
+            dt.setUTCDate(dt.getUTCDate() - dow + 3);
+            const year = dt.getUTCFullYear();
+            const jan4 = new Date(Date.UTC(year, 0, 4));
+            const week1Mon = new Date(Date.UTC(year, 0, 4 - ((jan4.getUTCDay() + 6) % 7)));
+            return { year, week: 1 + Math.round(((dt - week1Mon) / 86400000 - 3) / 7) };
+        }
+
+        // Mon..Sun as Date objects (UTC-anchored) of ISO week `week` in `year`.
+        function isoWeekDatesClient(year, week) {
+            const jan4 = new Date(Date.UTC(year, 0, 4));
+            const week1Mon = new Date(Date.UTC(year, 0, 4 - ((jan4.getUTCDay() + 6) % 7)));
+            const out = [];
+            for (let i = 0; i < 7; i++) {
+                out.push(new Date(week1Mon.getTime() + ((week - 1) * 7 + i) * 86400000));
+            }
+            return out;
+        }
+
+        // Today's date string in the app timezone (same zone the server uses),
+        // so the week list and the "today" column can't drift around midnight.
+        function pragueToday() {
+            return new Intl.DateTimeFormat('en-CA', {
+                timeZone: 'Europe/Prague', year: 'numeric', month: '2-digit', day: '2-digit'
+            }).format(new Date());
+        }
+
+        function setupHistory() {
+            const cs = document.getElementById('historyCitySelect');
+            cs.innerHTML = HISTORY_CITIES.map(c =>
+                `<option value="${c}" ${c === historyCity ? 'selected' : ''}>${c}</option>`).join('');
+            cs.addEventListener('change', e => { historyCity = e.target.value; loadHistory(); });
+
+            const { year, week: cur } = isoWeekOfStr(pragueToday());
+            historyWeek = cur;
+            const fmt = new Intl.DateTimeFormat('en-GB', { timeZone: 'UTC', day: 'numeric', month: 'short' });
+            const opts = [];
+            for (let w = cur; w >= 1; w--) {
+                const ds = isoWeekDatesClient(year, w);
+                const range = `${fmt.format(ds[0])} – ${fmt.format(ds[6])}`;
+                opts.push(`<option value="${w}" ${w === cur ? 'selected' : ''}>Week ${w} (${range})${w === cur ? ' — current' : ''}</option>`);
+            }
+            const ws = document.getElementById('historyWeekSelect');
+            ws.innerHTML = opts.join('');
+            ws.addEventListener('change', e => { historyWeek = parseInt(e.target.value, 10); loadHistory(); });
+
+            const ss = document.getElementById('historySourceSelect');
+            ss.innerHTML = HISTORY_SOURCES.map(s =>
+                `<option value="${s.id}" ${s.id === historySource ? 'selected' : ''}>${s.label}</option>`).join('');
+            ss.addEventListener('change', e => { historySource = e.target.value; loadHistory(); });
+        }
+
+        async function loadHistory() {
+            if (historyWeek === null) return;
+            const container = document.getElementById('historyContainer');
+            container.innerHTML = '<div style="color:#8fa3b8;padding:10px;">Loading…</div>';
+            document.getElementById('historyLegend').innerHTML = '';
+            try {
+                const res = await fetch(`/api/history/${encodeURIComponent(historyCity)}?week=${historyWeek}&source=${encodeURIComponent(historySource)}`);
+                const data = await res.json().catch(() => null);
+                if (!res.ok || !data || !Array.isArray(data.temps)) {
+                    container.innerHTML = `<div class="error">${(data && data.error) || 'Could not load history data.'}</div>`;
+                    return;
+                }
+                renderHistory(data);
+            } catch (e) {
+                console.error('Error loading history:', e);
+                container.innerHTML = '<div class="error">Could not load history data.</div>';
+            }
+        }
+
+        function renderHistory(data) {
+            const today = pragueToday();
+            const srcLabel = data.source === 'median' ? 'Global median' : 'Openmeteo';
+
+            let html = `<table class="data-table"><caption>📖 ${data.city} — Week ${data.week}, ${data.year} (${data.start} → ${data.end}) · ${srcLabel} (°C, CET/CEST)</caption>`;
+            html += '<thead><tr><th class="time-col">Time</th>';
+            data.days.forEach(d => {
+                const isToday = d === today;
+                html += `<th class="${isToday ? 'today-col' : ''}">${weekdayName(d).slice(0, 3)}${isToday ? ' · today' : ''}` +
+                        `<br><span style="font-weight:400;color:#7a8a9a;font-size:0.7rem;">${d}</span></th>`;
+            });
+            html += '</tr></thead><tbody>';
+            for (let h = 0; h < 24; h++) {
+                html += `<tr><td class="time-col">${String(h).padStart(2, '0')}:00</td>`;
+                for (let d = 0; d < 7; d++) {
+                    const v = data.temps[h][d];
+                    const na = (v === null || v === undefined);
+                    const cls = `${data.days[d] === today ? 'today-col' : ''}${na ? ' na' : ''}`.trim();
+                    html += `<td class="${cls}">${fmtTemp(v)}</td>`;
+                }
+                html += '</tr>';
+            }
+            html += '</tbody></table>';
+            document.getElementById('historyContainer').innerHTML = html;
+
+            const names = (data.sources || []).map(s => s.label).join(', ');
+            const srcNote = data.source === 'median'
+                ? `<strong>Global median</strong> — each cell is the per-hour median of the sources covering this location, here: ${names || 'none'}. Sources with no coverage (e.g. MET Norway outside the Nordics) are skipped automatically.`
+                : `<strong>Openmeteo</strong> — values come from Open-Meteo's default best-match model.`;
+            const when = data.generatedAt ? new Date(data.generatedAt).toLocaleString() : '';
+            document.getElementById('historyLegend').innerHTML =
+                `${srcNote}<div class="note">Only hours that have already happened are shown — blank cells (—) have not happened yet. ` +
+                `Data: Open-Meteo ${data.endpoint}. Generated ${when}.</div>`;
         }
 
         // ---- LIVE tab -----------------------------------------------------
@@ -1678,6 +1839,7 @@
             table:  { view: 'tableView',  tab: 'tabTable' },
             czprep: { view: 'czPrepView', tab: 'tabCzPrep' },
             huprep: { view: 'huPrepView', tab: 'tabHuPrep' },
+            history: { view: 'historyView', tab: 'tabHistory' },
             live:   { view: 'liveView',   tab: 'tabLive' },
             market: { view: 'marketView', tab: 'tabMarket' },
         };
@@ -1692,6 +1854,7 @@
             if (tab === 'table') loadTable();
             if (tab === 'czprep') loadPreparation('CZ');
             if (tab === 'huprep') loadPreparation('HU');
+            if (tab === 'history') loadHistory();
             if (tab === 'live') loadLive();
             if (tab === 'market') loadMarket();
         }
@@ -1724,6 +1887,7 @@
                 if (document.getElementById('tableView').style.display !== 'none') loadTable();
                 if (document.getElementById('czPrepView').style.display !== 'none') loadPreparation('CZ');
                 if (document.getElementById('huPrepView').style.display !== 'none') loadPreparation('HU');
+                if (document.getElementById('historyView').style.display !== 'none') loadHistory();
                 if (document.getElementById('liveView').style.display !== 'none') loadLive();
                 if (document.getElementById('marketView').style.display !== 'none') loadMarket();
             } catch (err) {

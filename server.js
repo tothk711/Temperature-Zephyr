@@ -494,9 +494,9 @@ async function verifyCity(city) {
 // ---------------------------------------------------------------------------
 // Country preparation overview (CZ / HU)
 //
-// A 5-day "what's coming" table for a capital city (used as the country proxy:
-// Prague = CZ, Budapest = HU). Shows temperatures at 08:00/16:00/00:00 plus
-// pressure, wind, weather, cloud cover and solar (FVE) potential, with
+// A 6-day "what's coming" table for a capital city (used as the country proxy:
+// Prague = CZ, Budapest = HU). Shows temperatures at 08:00/12:00/16:00/20:00/
+// 00:00 plus pressure, wind, weather, cloud cover and solar (FVE) potential, with
 // auto-generated notes. Every value comes straight from Open-Meteo; anything
 // the API does not return is left null and rendered blank — never invented.
 // The pure functions (parsePreparation, buildNotes, classify*) are exported so
@@ -504,7 +504,7 @@ async function verifyCity(city) {
 // ---------------------------------------------------------------------------
 
 const PREP_TZ = { Prague: 'Europe/Prague', Budapest: 'Europe/Budapest' };
-const PREP_LABELS = ['Today', 'Tomorrow', 'D+2', 'D+3', 'D+4'];
+const PREP_LABELS = ['Today', 'Tomorrow', 'D+2', 'D+3', 'D+4', 'D+5'];
 
 // WMO weather code -> short human description.
 const WMO_DESC = {
@@ -569,7 +569,7 @@ function parsePreparation(raw) {
   };
 
   const days = [];
-  const nDays = Math.min(raw.daily.time.length, 5);
+  const nDays = Math.min(raw.daily.time.length, 6);
   for (let di = 0; di < nDays; di++) {
     const date = raw.daily.time[di];
 
@@ -597,7 +597,9 @@ function parsePreparation(raw) {
       date,
       temp: {
         h8: numAt(h.temperature_2m, `${date}T08:00`),
+        h12: numAt(h.temperature_2m, `${date}T12:00`),
         h16: numAt(h.temperature_2m, `${date}T16:00`),
+        h20: numAt(h.temperature_2m, `${date}T20:00`),
         h0: numAt(h.temperature_2m, `${date}T00:00`)
       },
       tempMax: dailyNum(raw.daily.temperature_2m_max, di),
@@ -660,7 +662,7 @@ async function fetchPreparation(city) {
   const tz = PREP_TZ[city.name] || APP_TIMEZONE;
   const hourly = 'temperature_2m,cloud_cover,pressure_msl,wind_gusts_10m,shortwave_radiation,weather_code';
   const daily = 'weather_code,temperature_2m_max,temperature_2m_min,shortwave_radiation_sum,precipitation_sum,wind_gusts_10m_max,sunshine_duration';
-  const url = `https://api.open-meteo.com/v1/forecast?latitude=${city.lat}&longitude=${city.lon}&hourly=${hourly}&daily=${daily}&forecast_days=5&timezone=${encodeURIComponent(tz)}&wind_speed_unit=kmh`;
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${city.lat}&longitude=${city.lon}&hourly=${hourly}&daily=${daily}&forecast_days=6&timezone=${encodeURIComponent(tz)}&wind_speed_unit=kmh`;
 
   const r = await fetch(url);
   if (!r.ok) throw new Error(`Open-Meteo HTTP ${r.status}`);
@@ -1359,7 +1361,7 @@ app.get('/api/verify/:city', async (req, res) => {
   }
 });
 
-// 5-day preparation overview for a capital city (Prague = CZ, Budapest = HU)
+// 6-day preparation overview for a capital city (Prague = CZ, Budapest = HU)
 app.get('/api/preparation/:city', async (req, res) => {
   const city = cities.find(c => c.name === req.params.city);
   if (!city) {
@@ -1415,6 +1417,242 @@ app.get('/api/market/:country', async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// History (📖 History tab)
+//
+// Actual past temperatures for one city and one ISO week (Mon–Sun) of the
+// current ISO year, hour by hour: 24 rows × 7 day columns. Two source modes:
+//   - "openmeteo": Open-Meteo's default best_match model only
+//   - "median":    per-hour median across every implemented source
+//                  (ECMWF, DWD ICON, NOAA GFS, Météo-France, MET Norway,
+//                   Open-Meteo best_match)
+// Finished weeks come from Open-Meteo's Historical Forecast archive; weeks
+// touching the last few days use the forecast endpoint's past_days instead
+// (the archive lags roughly a day behind). Like the cross-check, models are
+// fetched ONE PER CALL so the response is always plain `temperature_2m`, and
+// any model with no coverage for a location is skipped instead of failing the
+// whole request (MET Norway's Nordic domain does not reach CZ/HU — the
+// response's `sources` list shows what actually contributed). Hours that have
+// not happened yet are always null — forecast values are never shown here.
+// The date/median/table helpers below are pure and exported for unit tests.
+// ---------------------------------------------------------------------------
+
+const HISTORY = {
+  SOURCES: [
+    { id: 'best_match',           label: 'Open-Meteo' },
+    { id: 'ecmwf_ifs025',         label: 'ECMWF' },
+    { id: 'icon_seamless',        label: 'DWD ICON' },
+    { id: 'gfs_seamless',         label: 'NOAA GFS' },
+    { id: 'meteofrance_seamless', label: 'Météo-France' },
+    { id: 'metno_seamless',       label: 'MET Norway' },
+  ],
+  ARCHIVE_URL: 'https://historical-forecast-api.open-meteo.com/v1/forecast',
+  FORECAST_URL: 'https://api.open-meteo.com/v1/forecast',
+  ARCHIVE_LAG_DAYS: 3,                // archive may miss the newest days
+  CACHE_MS_PAST: 6 * 60 * 60 * 1000,  // finished weeks barely change
+  CACHE_MS_CURRENT: 15 * 60 * 1000,   // current week fills in as hours pass
+};
+
+// ---- pure date helpers (ISO-8601 weeks, Monday-first) ----------------------
+
+// 'YYYY-MM-DD' + n days -> 'YYYY-MM-DD' (UTC math, DST-proof).
+function addDays(dateStr, n) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d + n));
+  return dt.toISOString().slice(0, 10);
+}
+
+// Whole days from a to b ('YYYY-MM-DD' each); positive when b is later.
+function daysBetween(a, b) {
+  const toUTC = s => { const [y, m, d] = s.split('-').map(Number); return Date.UTC(y, m - 1, d); };
+  return Math.round((toUTC(b) - toUTC(a)) / 86400000);
+}
+
+// ISO week number + ISO week-year for a 'YYYY-MM-DD' date.
+function isoWeekOf(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  const dow = (dt.getUTCDay() + 6) % 7;      // 0 = Monday … 6 = Sunday
+  dt.setUTCDate(dt.getUTCDate() - dow + 3);  // this week's Thursday
+  const year = dt.getUTCFullYear();          // ISO week-year
+  const jan4 = new Date(Date.UTC(year, 0, 4));
+  const week1Mon = new Date(Date.UTC(year, 0, 4 - ((jan4.getUTCDay() + 6) % 7)));
+  const week = 1 + Math.round(((dt - week1Mon) / 86400000 - 3) / 7);
+  return { year, week };
+}
+
+// The 7 dates (Mon..Sun) of ISO week `week` in ISO week-year `year`.
+function isoWeekDates(year, week) {
+  const jan4 = new Date(Date.UTC(year, 0, 4)); // Jan 4 is always in ISO week 1
+  const week1Mon = new Date(Date.UTC(year, 0, 4 - ((jan4.getUTCDay() + 6) % 7)));
+  const out = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(week1Mon.getTime() + ((week - 1) * 7 + i) * 86400000);
+    out.push(d.toISOString().slice(0, 10));
+  }
+  return out;
+}
+
+// Median of the numeric entries of an array; null when none.
+function medianOf(values) {
+  const nums = (values || []).filter(v => typeof v === 'number' && !Number.isNaN(v)).sort((a, b) => a - b);
+  if (!nums.length) return null;
+  const mid = Math.floor(nums.length / 2);
+  return nums.length % 2 ? nums[mid] : (nums[mid - 1] + nums[mid]) / 2;
+}
+
+// Current local 'YYYY-MM-DD' + hour (0-23) in timezone `tz`.
+function nowInTz(tz) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', hour12: false
+  }).formatToParts(new Date());
+  const get = t => (parts.find(p => p.type === t) || {}).value;
+  let hh = parseInt(get('hour'), 10);
+  if (hh === 24) hh = 0; // some ICU builds report midnight as 24
+  return { date: `${get('year')}-${get('month')}-${get('day')}`, hour: hh };
+}
+
+// Pure: assemble the 24×7 matrix from per-source hourly maps.
+//   perSource: [{ id, label, values: { 'YYYY-MM-DDTHH:00': number } }]
+//   days:      the week's 7 'YYYY-MM-DD' dates (Mon..Sun)
+//   cutoff:    { date, hour } — cells after this moment stay null
+//   mode:      'openmeteo' (best_match only) | 'median' (all sources)
+// Returns { temps: (number|null)[24][7], sources: [{ id, label, hours }] }
+// where `hours` counts the already-happened cells that source supplied.
+function buildHistoryTable(perSource, days, cutoff, mode) {
+  const list = (perSource || []).filter(s => s && s.values);
+  const used = mode === 'median' ? list : list.filter(s => s.id === 'best_match');
+  const happened = (date, h) =>
+    date < cutoff.date || (date === cutoff.date && h <= cutoff.hour);
+
+  const counts = {};
+  const temps = [];
+  for (let h = 0; h < 24; h++) {
+    const row = [];
+    for (let d = 0; d < 7; d++) {
+      const date = days[d];
+      if (!happened(date, h)) { row.push(null); continue; }
+      const key = `${date}T${String(h).padStart(2, '0')}:00`;
+      const vals = [];
+      for (const s of used) {
+        const v = s.values[key];
+        if (typeof v === 'number' && !Number.isNaN(v)) {
+          vals.push(v);
+          counts[s.id] = (counts[s.id] || 0) + 1;
+        }
+      }
+      row.push(mode === 'median' ? medianOf(vals) : (vals.length ? vals[0] : null));
+    }
+    temps.push(row);
+  }
+  const sources = used
+    .filter(s => counts[s.id] > 0)
+    .map(s => ({ id: s.id, label: s.label, hours: counts[s.id] }));
+  return { temps, sources };
+}
+
+// ---- fetching ---------------------------------------------------------------
+
+// One source for one week. Returns { id, label, values } or null on any
+// failure (a missing model must not break the others).
+async function fetchHistorySource(city, src, days, tz, recentDays) {
+  const base = `latitude=${city.lat}&longitude=${city.lon}&hourly=temperature_2m` +
+               `&models=${src.id}&timezone=${encodeURIComponent(tz)}`;
+  const url = (recentDays === null)
+    ? `${HISTORY.ARCHIVE_URL}?${base}&start_date=${days[0]}&end_date=${days[6]}`
+    : `${HISTORY.FORECAST_URL}?${base}&past_days=${recentDays}&forecast_days=1`;
+  try {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const raw = await r.json();
+    if (raw.error) throw new Error(raw.reason || 'API error');
+    const h = raw.hourly || {};
+    const time = Array.isArray(h.time) ? h.time : [];
+    // With a single model requested the variable stays plain `temperature_2m`;
+    // accept the suffixed form too in case the API ever changes that.
+    const arr = Array.isArray(h.temperature_2m) ? h.temperature_2m
+              : (Array.isArray(h[`temperature_2m_${src.id}`]) ? h[`temperature_2m_${src.id}`] : []);
+    const values = {};
+    for (let i = 0; i < time.length; i++) {
+      const v = arr[i];
+      if (typeof v === 'number' && !Number.isNaN(v)) values[time[i]] = v;
+    }
+    return { id: src.id, label: src.label, values };
+  } catch (err) {
+    console.warn(`History source ${src.id} skipped for ${city.name}: ${err.message}`);
+    return null;
+  }
+}
+
+const historyCache = {};
+
+async function fetchHistory(city, week, source) {
+  const tz = PREP_TZ[city.name] || APP_TIMEZONE;
+  const now = nowInTz(tz);
+  const { year } = isoWeekOf(now.date);
+  const days = isoWeekDates(year, week);
+
+  const cacheKey = `${city.name}|${days[0]}|${source}`;
+  const ttl = days[6] < now.date ? HISTORY.CACHE_MS_PAST : HISTORY.CACHE_MS_CURRENT;
+  const cached = historyCache[cacheKey];
+  if (cached && (Date.now() - cached.ts) < ttl) return cached.result;
+
+  // Finished long enough ago -> stable archive; otherwise the forecast
+  // endpoint's past_days (which always has the newest hours).
+  const useArchive = daysBetween(days[6], now.date) > HISTORY.ARCHIVE_LAG_DAYS;
+  const recentDays = useArchive ? null
+    : Math.min(92, Math.max(1, daysBetween(days[0], now.date)));
+
+  const wanted = source === 'median'
+    ? HISTORY.SOURCES
+    : HISTORY.SOURCES.filter(s => s.id === 'best_match');
+  const settled = await Promise.all(
+    wanted.map(s => fetchHistorySource(city, s, days, tz, recentDays))
+  );
+  const perSource = settled.filter(Boolean);
+  if (!perSource.length) throw new Error('No history source responded');
+
+  const { temps, sources } = buildHistoryTable(perSource, days, now, source);
+
+  const result = {
+    city: city.name,
+    year, week, start: days[0], end: days[6], days,
+    source,
+    sources,
+    endpoint: useArchive ? 'historical-forecast archive' : 'forecast past_days',
+    units: { temp: '°C' },
+    generatedAt: new Date().toISOString(),
+    temps
+  };
+  historyCache[cacheKey] = { result, ts: Date.now() };
+  return result;
+}
+
+// Historical hour-by-hour temperatures for one ISO week (📖 History tab)
+app.get('/api/history/:city', async (req, res) => {
+  const city = cities.find(c => c.name === req.params.city);
+  if (!city) {
+    return res.status(404).json({ error: 'City not found' });
+  }
+  const source = String(req.query.source || 'openmeteo');
+  if (source !== 'openmeteo' && source !== 'median') {
+    return res.status(400).json({ error: "source must be 'openmeteo' or 'median'" });
+  }
+  const tz = PREP_TZ[city.name] || APP_TIMEZONE;
+  const cur = isoWeekOf(nowInTz(tz).date);
+  const week = parseInt(req.query.week, 10);
+  if (!Number.isInteger(week) || week < 1 || week > cur.week) {
+    return res.status(400).json({ error: `week must be between 1 and ${cur.week}` });
+  }
+  try {
+    res.json(await fetchHistory(city, week, source));
+  } catch (err) {
+    console.error(`History failed for ${req.params.city}:`, err.message);
+    res.status(500).json({ error: 'Could not build history' });
+  }
+});
+
 // Initialize and start. initDB never throws (it degrades to memory-only), so
 // the server always comes up even when Postgres is down.
 async function start() {
@@ -1447,5 +1685,7 @@ module.exports = {
   analyzeCrossCheck, localHourIndex, modelLabel, CROSSCHECK,
   parseLive, liveDir,
   parseMarketCity, buildMarketBrief, windPowerAt, windPowerIndex, solarIndex,
-  degreeDays, signalDir, MARKET
+  degreeDays, signalDir, MARKET,
+  addDays, daysBetween, isoWeekOf, isoWeekDates, medianOf, nowInTz,
+  buildHistoryTable, HISTORY
 };
