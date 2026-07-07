@@ -1,10 +1,22 @@
 # Temperature Zephyr — Handoff Note
 
-**Date:** 2026-07-07 · **Current version:** 1.3.0 (main folder) · **Baseline:** 1.0.0 (`Temperature1.0/` — see note below)
+**Date:** 2026-07-07 · **Current version:** 1.3.1 (main folder) · **Baseline:** 1.0.0 (`Temperature1.0/` — see note below)
 
 A weather/temperature dashboard for Central European cities, used to support energy /
 power‑trading decisions (solar "FVE" output, wind generation, grid load). Node + Express
 backend, PostgreSQL cache, single‑file Chart.js front‑end, all data from Open‑Meteo.
+
+---
+
+## v1.3.1 addendum (2026-07-07)
+
+- **Flags:** the v1.3.0 Twemoji webfont did NOT work on the user's Windows machine —
+  buttons don't inherit the body font-family, so the unicode-range font never applied to
+  the tab labels. Replaced with inline SVG flags (`.flag` CSS + `PREP_CONFIG[..].flag`);
+  the @font-face and its CDN fetch were removed. No dependencies, works everywhere.
+- **History tab:** per-cell heat colouring scaled to the displayed week (dark green =
+  min, dark red = max, HSL hue interpolation between; blank future cells stay uncoloured).
+  Scale legend with real min/max added to the footer.
 
 ---
 

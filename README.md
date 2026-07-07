@@ -294,6 +294,17 @@ fetches all cities, and schedules a refresh every 6 hours.
 
 ## Changelog
 
+### v1.3.1 — July 2026 — SVG flags, History heat map
+- **Flag rendering fixed for real.** The v1.3.0 webfont approach failed in practice:
+  `<button>` elements don't inherit the page font, and Windows has no native flag glyphs,
+  so the tabs still showed "CZ"/"HU". The tabs and the future‑tab captions now use tiny
+  **inline SVG flags** — vector shapes, no font, no CDN, render identically everywhere.
+  The webfont was removed.
+- **History heat map.** Every filled cell in the 📖 History table is colour‑coded within
+  the displayed week: coldest hour = dark green background, warmest = dark red, hue
+  gradient (green → yellow → orange → red) in between, with light text for contrast.
+  The footer legend shows the scale with the week's actual min/max.
+
 ### v1.3.0 — July 2026 — History tab, 6‑day outlook, flag tabs
 - **📖 History tab.** Pick a **city** (all eight), an **ISO week of this year** (1 → the
   current week) and a **source**, and see the actual temperature for every hour that has

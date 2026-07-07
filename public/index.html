@@ -9,17 +9,16 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.1.0/dist/chartjs-plugin-annotation.min.js"></script>
     <style>
-        /* Country-flag emoji glyphs. Windows ships no native flag emoji font
-           (Chrome/Edge there render 🇨🇿 as the letters "CZ"), so flags use this
-           tiny Twemoji subset font from the same pinned CDN as Chart.js above.
-           unicode-range limits it strictly to flag codepoints — every other
-           character keeps the system font. If the CDN is unreachable, the
-           tabs degrade gracefully to the letters CZ / HU. */
-        @font-face {
-            font-family: 'Twemoji Country Flags';
-            unicode-range: U+1F1E6-1F1FF, U+1F3F4, U+E0062-E0063, U+E0065, U+E0067, U+E006C, U+E006E, U+E0073-E0074, U+E0077, U+E007F;
-            src: url('https://cdn.jsdelivr.net/npm/country-flag-emoji-polyfill@0.1.8/dist/TwemojiCountryFlags.woff2') format('woff2');
-            font-display: swap;
+        /* Country flags as inline SVG (tab labels + future-tab captions).
+           Emoji flags are unreliable here: Windows ships no flag-emoji glyphs
+           and <button> elements do not inherit the page font, so a webfont
+           polyfill fails exactly where the flags live. Vector shapes render
+           identically on every OS with zero dependencies. */
+        .flag {
+            width: 1.15em;
+            height: 0.77em;
+            vertical-align: -0.08em;
+            border-radius: 2px;
         }
 
         * {
@@ -29,7 +28,7 @@
         }
 
         body {
-            font-family: 'Twemoji Country Flags', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
             background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
             color: #eee;
             min-height: 100vh;
@@ -662,8 +661,8 @@
         <div class="tabs">
             <button class="tab-btn active" id="tabGraphs" onclick="showTab('graphs')">📊 Graphs</button>
             <button class="tab-btn" id="tabTable" onclick="showTab('table')">📋 Table</button>
-            <button class="tab-btn" id="tabCzPrep" onclick="showTab('czprep')">🇨🇿 future</button>
-            <button class="tab-btn" id="tabHuPrep" onclick="showTab('huprep')">🇭🇺 future</button>
+            <button class="tab-btn" id="tabCzPrep" onclick="showTab('czprep')"><svg class="flag" viewBox="0 0 900 600" aria-hidden="true"><rect width="900" height="600" fill="#fff"/><rect y="300" width="900" height="300" fill="#d7141a"/><path d="M0 0 450 300 0 600Z" fill="#11457e"/></svg> future</button>
+            <button class="tab-btn" id="tabHuPrep" onclick="showTab('huprep')"><svg class="flag" viewBox="0 0 900 600" aria-hidden="true"><rect width="900" height="600" fill="#436f4d"/><rect width="900" height="400" fill="#fff"/><rect width="900" height="200" fill="#cd2a3e"/></svg> future</button>
             <button class="tab-btn" id="tabHistory" onclick="showTab('history')">📖 History</button>
             <button class="tab-btn" id="tabLive" onclick="showTab('live')">⚡ LIVE</button>
             <button class="tab-btn" id="tabMarket" onclick="showTab('market')">📈 Market</button>
@@ -1308,9 +1307,10 @@
 
         // ---- Preparation (CZ / HU) ----------------------------------------
 
+        // flag: inline SVG markup (see .flag CSS — emoji flags don't render on Windows)
         const PREP_CONFIG = {
-            CZ: { capital: 'Prague',   container: 'czPrepContainer', legend: 'czPrepLegend', flag: '🇨🇿' },
-            HU: { capital: 'Budapest', container: 'huPrepContainer', legend: 'huPrepLegend', flag: '🇭🇺' },
+            CZ: { capital: 'Prague',   container: 'czPrepContainer', legend: 'czPrepLegend', flag: '<svg class="flag" viewBox="0 0 900 600" aria-hidden="true"><rect width="900" height="600" fill="#fff"/><rect y="300" width="900" height="300" fill="#d7141a"/><path d="M0 0 450 300 0 600Z" fill="#11457e"/></svg>' },
+            HU: { capital: 'Budapest', container: 'huPrepContainer', legend: 'huPrepLegend', flag: '<svg class="flag" viewBox="0 0 900 600" aria-hidden="true"><rect width="900" height="600" fill="#436f4d"/><rect width="900" height="400" fill="#fff"/><rect width="900" height="200" fill="#cd2a3e"/></svg>' },
         };
 
         // Hover explanations for each category (shown as native tooltips).
@@ -1564,13 +1564,28 @@
                         `<br><span style="font-weight:400;color:#7a8a9a;font-size:0.7rem;">${d}</span></th>`;
             });
             html += '</tr></thead><tbody>';
+
+            // Heat colouring: the week's coldest hour gets a dark green
+            // background, the warmest a dark red, and everything between a
+            // hue gradient (green -> yellow -> orange -> red). Scaled to the
+            // currently displayed table, so the full range is always used.
+            const vals = [];
+            data.temps.forEach(row => row.forEach(v => { if (typeof v === 'number') vals.push(v); }));
+            const vMin = vals.length ? Math.min(...vals) : 0;
+            const vMax = vals.length ? Math.max(...vals) : 0;
+            const heatStyle = v => {
+                const t = vMax > vMin ? (v - vMin) / (vMax - vMin) : 0.5;
+                const hue = Math.round(120 * (1 - t)); // 120 = green, 0 = red
+                return ` style="background:hsl(${hue},62%,30%);color:#f5f7f9;font-weight:600;"`;
+            };
+
             for (let h = 0; h < 24; h++) {
                 html += `<tr><td class="time-col">${String(h).padStart(2, '0')}:00</td>`;
                 for (let d = 0; d < 7; d++) {
                     const v = data.temps[h][d];
-                    const na = (v === null || v === undefined);
-                    const cls = `${data.days[d] === today ? 'today-col' : ''}${na ? ' na' : ''}`.trim();
-                    html += `<td class="${cls}">${fmtTemp(v)}</td>`;
+                    html += (v === null || v === undefined)
+                        ? '<td class="na">—</td>'
+                        : `<td${heatStyle(v)}>${fmtTemp(v)}</td>`;
                 }
                 html += '</tr>';
             }
@@ -1582,7 +1597,12 @@
                 ? `<strong>Global median</strong> — each cell is the per-hour median of the sources covering this location, here: ${names || 'none'}. Sources with no coverage (e.g. MET Norway outside the Nordics) are skipped automatically.`
                 : `<strong>Openmeteo</strong> — values come from Open-Meteo's default best-match model.`;
             const when = data.generatedAt ? new Date(data.generatedAt).toLocaleString() : '';
+            const sw = h => `<span class="swatch" style="background:hsl(${h},62%,30%)"></span>`;
             document.getElementById('historyLegend').innerHTML =
+                `<strong>Colour = position within this week's range:</strong> ` +
+                `${sw(120)} coldest (${fmtTemp(vals.length ? vMin : null)}) ` +
+                `${sw(60)} middle ` +
+                `${sw(0)} warmest (${fmtTemp(vals.length ? vMax : null)})<br>` +
                 `${srcNote}<div class="note">Only hours that have already happened are shown — blank cells (—) have not happened yet. ` +
                 `Data: Open-Meteo ${data.endpoint}. Generated ${when}.</div>`;
         }
