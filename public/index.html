@@ -348,6 +348,18 @@
             outline: none;
         }
 
+        .dec-btn {
+            margin-left: auto;
+            padding: 8px 14px;
+            font-size: 0.85rem;
+            border: none;
+            border-radius: 8px;
+            background: #0f3460;
+            color: #eee;
+            cursor: pointer;
+        }
+        .dec-btn:hover { background: #1a4a7a; }
+
         .table-scroll { overflow-x: auto; }
 
         table.data-table {
@@ -661,14 +673,21 @@
         <div class="tabs">
             <button class="tab-btn active" id="tabGraphs" onclick="showTab('graphs')">📊 Graphs</button>
             <button class="tab-btn" id="tabTable" onclick="showTab('table')">📋 Table</button>
-            <button class="tab-btn" id="tabCzPrep" onclick="showTab('czprep')"><svg class="flag" viewBox="0 0 900 600" aria-hidden="true"><rect width="900" height="600" fill="#fff"/><rect y="300" width="900" height="300" fill="#d7141a"/><path d="M0 0 450 300 0 600Z" fill="#11457e"/></svg> Future</button>
-            <button class="tab-btn" id="tabHuPrep" onclick="showTab('huprep')"><svg class="flag" viewBox="0 0 900 600" aria-hidden="true"><rect width="900" height="600" fill="#436f4d"/><rect width="900" height="400" fill="#fff"/><rect width="900" height="200" fill="#cd2a3e"/></svg> Future</button>
+            <button class="tab-btn" id="tabCzPrep" onclick="showTab('czprep')"><svg class="flag" viewBox="0 0 900 600" aria-hidden="true"><rect width="900" height="600" fill="#fff"/><rect y="300" width="900" height="300" fill="#d7141a"/><path d="M0 0 450 300 0 600Z" fill="#11457e"/></svg> future</button>
+            <button class="tab-btn" id="tabHuPrep" onclick="showTab('huprep')"><svg class="flag" viewBox="0 0 900 600" aria-hidden="true"><rect width="900" height="600" fill="#436f4d"/><rect width="900" height="400" fill="#fff"/><rect width="900" height="200" fill="#cd2a3e"/></svg> future</button>
             <button class="tab-btn" id="tabHistory" onclick="showTab('history')">📖 History</button>
             <button class="tab-btn" id="tabLive" onclick="showTab('live')">⚡ LIVE</button>
             <button class="tab-btn" id="tabMarket" onclick="showTab('market')">📈 Market</button>
         </div>
 
       <div id="graphsView">
+        <div class="table-controls">
+            <label for="graphSourceSelect">Source:</label>
+            <select id="graphSourceSelect">
+                <option value="median" selected>Global median</option>
+                <option value="openmeteo">Openmeteo</option>
+            </select>
+        </div>
         <div class="graphs-container">
             <!-- Left Graph - Czech Cities -->
             <div class="chart-panel">
@@ -768,6 +787,7 @@
                 <label for="tableCitySelect">City:</label>
                 <select id="tableCitySelect"></select>
                 <span class="verify-badge checking" id="tableVerify" onclick="toggleDetails('table')">⏳ Checking…</span>
+                <button class="dec-btn" id="tableDecBtn" title="Decimal places — click to cycle 0/1/2">Dec 0</button>
             </div>
             <div class="verify-details" id="tableVerifyDetails"></div>
             <div class="table-scroll">
@@ -803,6 +823,7 @@
                 <select id="historyWeekSelect"></select>
                 <label for="historySourceSelect">Source:</label>
                 <select id="historySourceSelect"></select>
+                <button class="dec-btn" id="historyDecBtn" title="Decimal places — click to cycle 0/1/2">Dec 0</button>
             </div>
             <div class="table-scroll">
                 <div id="historyContainer"></div>
@@ -846,6 +867,7 @@
         // Current selections
         let leftCity = 'Czechia';
         let rightCity = 'Budapest';
+        let graphSource = 'median'; // feeds ALL chart lines (median | openmeteo)
 
         // Cache for city data (for calculating Czechia average)
         let cityDataCache = {};
@@ -857,6 +879,11 @@
             setupTable();
             setupHistory();
             setupLegends();
+            document.getElementById('graphSourceSelect').addEventListener('change', (e) => {
+                graphSource = e.target.value;
+                loadWeatherData('left', leftCity);
+                loadWeatherData('right', rightCity);
+            });
             // Keep the LIVE tab fresh while it is the visible view.
             setInterval(() => {
                 const v = document.getElementById('liveView');
@@ -960,14 +987,17 @@
 
         // Fetch a city's weather data (handles the Czechia average + caching).
         // Shared by the graphs and the table so they always agree.
-        async function fetchCityData(cityName) {
+        async function fetchCityData(cityName, source = 'openmeteo') {
             // Only ever cache validated payloads — a cached error object would
             // keep breaking every render until the next manual refresh.
+            // The cache key includes the source, so Global-median (Graphs) and
+            // best_match (Table) data live side by side without collisions.
             const getOne = async (city) => {
-                if (cityDataCache[city]) return cityDataCache[city];
-                const data = await fetchJson(`/api/weather/${encodeURIComponent(city)}`);
+                const key = `${source}|${city}`;
+                if (cityDataCache[key]) return cityDataCache[key];
+                const data = await fetchJson(`/api/weather/${encodeURIComponent(city)}?source=${encodeURIComponent(source)}`);
                 if (!isWeatherPayload(data)) throw new Error(`Bad weather payload for ${city}`);
-                cityDataCache[city] = data;
+                cityDataCache[key] = data;
                 return data;
             };
             if (cityName === 'Czechia') {
@@ -984,7 +1014,7 @@
         // Load weather data for a chart
         async function loadWeatherData(side, cityName) {
             try {
-                const data = await fetchCityData(cityName);
+                const data = await fetchCityData(cityName, graphSource);
                 renderChart(side, cityName, data);
                 updateStatus(data.updatedAt);
                 loadVerification(side, cityName); // runs in the background
@@ -1239,10 +1269,23 @@
 
         const tableCities = ['Czechia', ...czechCitiesForAverage, ...otherCities];
         let tableCity = 'Czechia';
-        const TABLE_HOURS = [0, 4, 8, 12, 16, 20];
+        const TABLE_HOURS = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22];
+        let tableDecimals = 0;       // cycled by the Dec button
+        let lastTableRender = null;  // re-render without refetching
 
-        function fmtTemp(v) {
-            return (v === null || v === undefined || Number.isNaN(v)) ? '—' : `${v.toFixed(1)}°`;
+        function fmtTemp(v, dp = 1) {
+            return (v === null || v === undefined || Number.isNaN(v)) ? '—' : `${v.toFixed(dp)}°`;
+        }
+
+        // Shared heat colouring (Table + History): position of v within
+        // [vMin, vMax] -> hue 120 (dark green, coldest) … 0 (dark red,
+        // warmest). Optional alpha fades forecast cells.
+        function heatColor(v, vMin, vMax, alpha) {
+            const t = vMax > vMin ? (v - vMin) / (vMax - vMin) : 0.5;
+            const hue = Math.round(120 * (1 - t));
+            return alpha === undefined
+                ? `hsl(${hue},62%,30%)`
+                : `hsla(${hue},62%,30%,${alpha})`;
         }
 
         function setupTable() {
@@ -1254,9 +1297,16 @@
                 tableCity = e.target.value;
                 loadTable();
             });
+            const decBtn = document.getElementById('tableDecBtn');
+            decBtn.addEventListener('click', () => {
+                tableDecimals = (tableDecimals + 1) % 3;
+                decBtn.textContent = `Dec ${tableDecimals}`;
+                if (lastTableRender) renderTable(lastTableRender.cityName, lastTableRender.data);
+            });
         }
 
         function renderTable(cityName, data) {
+            lastTableRender = { cityName, data };
             const series = [
                 { key: 'pastDaysAvg',      label: 'Past Avg (3–7d)' },
                 { key: 'twoDaysAgo',       label: '2 Days Ago' },
@@ -1268,7 +1318,7 @@
             ];
             const displayName = cityName === 'Czechia' ? 'Czechia (Average)' : cityName;
 
-            let html = `<table class="data-table"><caption>Temperatures in ${displayName} — every 4 hours (°C, CET/CEST)</caption>`;
+            let html = `<table class="data-table"><caption>Temperatures in ${displayName} — every 2 hours (°C, CET/CEST)</caption>`;
             html += `<thead><tr><th class="time-col">Time</th>`;
             series.forEach(s => {
                 const d = (data[s.key] && data[s.key].date && data[s.key].date !== 'avg')
@@ -1277,14 +1327,23 @@
             });
             html += `</tr></thead><tbody>`;
 
+            // Heat colouring scaled to every value currently shown.
+            const vals = [];
+            TABLE_HOURS.forEach(h => series.forEach(s => {
+                const arr = (data[s.key] && data[s.key].temps) ? data[s.key].temps : [];
+                if (typeof arr[h] === 'number') vals.push(arr[h]);
+            }));
+            const vMin = vals.length ? Math.min(...vals) : 0;
+            const vMax = vals.length ? Math.max(...vals) : 0;
+
             TABLE_HOURS.forEach(h => {
                 html += `<tr><td class="time-col">${String(h).padStart(2, '0')}:00</td>`;
                 series.forEach(s => {
                     const arr = (data[s.key] && data[s.key].temps) ? data[s.key].temps : [];
                     const v = arr[h];
-                    const na = (v === null || v === undefined);
-                    const cls = `${s.highlight ? 'today-col' : ''}${na ? ' na' : ''}`.trim();
-                    html += `<td class="${cls}">${fmtTemp(v)}</td>`;
+                    html += (v === null || v === undefined)
+                        ? '<td class="na">—</td>'
+                        : `<td style="background:${heatColor(v, vMin, vMax)};color:#f5f7f9;font-weight:600;">${fmtTemp(v, tableDecimals)}</td>`;
                 });
                 html += `</tr>`;
             });
@@ -1469,12 +1528,14 @@
 
         const HISTORY_CITIES = [...czechCitiesForAverage, ...otherCities];
         const HISTORY_SOURCES = [
-            { id: 'openmeteo', label: 'Openmeteo' },
             { id: 'median',    label: 'Global median' },
+            { id: 'openmeteo', label: 'Openmeteo' },
         ];
         let historyCity = 'Prague';
         let historyWeek = null;      // set in setupHistory()
-        let historySource = 'openmeteo';
+        let historySource = 'median';
+        let historyDecimals = 0;     // cycled by the Dec button
+        let lastHistoryData = null;  // re-render without refetching
 
         // ISO week number (Monday-first) of a 'YYYY-MM-DD' string — the same
         // algorithm as the server's isoWeekOf, kept in lockstep.
@@ -1518,10 +1579,11 @@
             historyWeek = cur;
             const fmt = new Intl.DateTimeFormat('en-GB', { timeZone: 'UTC', day: 'numeric', month: 'short' });
             const opts = [];
-            for (let w = cur; w >= 1; w--) {
+            for (let w = cur + 2; w >= 1; w--) {
                 const ds = isoWeekDatesClient(year, w);
                 const range = `${fmt.format(ds[0])} – ${fmt.format(ds[6])}`;
-                opts.push(`<option value="${w}" ${w === cur ? 'selected' : ''}>Week ${w} (${range})${w === cur ? ' — current' : ''}</option>`);
+                const tag = w === cur ? ' — current' : (w > cur ? ' — upcoming' : '');
+                opts.push(`<option value="${w}" ${w === cur ? 'selected' : ''}>Week ${w} (${range})${tag}</option>`);
             }
             const ws = document.getElementById('historyWeekSelect');
             ws.innerHTML = opts.join('');
@@ -1531,6 +1593,13 @@
             ss.innerHTML = HISTORY_SOURCES.map(s =>
                 `<option value="${s.id}" ${s.id === historySource ? 'selected' : ''}>${s.label}</option>`).join('');
             ss.addEventListener('change', e => { historySource = e.target.value; loadHistory(); });
+
+            const decBtn = document.getElementById('historyDecBtn');
+            decBtn.addEventListener('click', () => {
+                historyDecimals = (historyDecimals + 1) % 3;
+                decBtn.textContent = `Dec ${historyDecimals}`;
+                if (lastHistoryData) renderHistory(lastHistoryData);
+            });
         }
 
         async function loadHistory() {
@@ -1553,6 +1622,7 @@
         }
 
         function renderHistory(data) {
+            lastHistoryData = data;
             const today = pragueToday();
             const srcLabel = data.source === 'median' ? 'Global median' : 'Openmeteo';
 
@@ -1565,27 +1635,24 @@
             });
             html += '</tr></thead><tbody>';
 
-            // Heat colouring: the week's coldest hour gets a dark green
-            // background, the warmest a dark red, and everything between a
-            // hue gradient (green -> yellow -> orange -> red). Scaled to the
-            // currently displayed table, so the full range is always used.
+            // Heat colouring scaled to the displayed week (see heatColor).
+            // Hours after the server's cutoff are FORECAST values: same hue
+            // but faded + italic, so model data is obvious at a glance.
             const vals = [];
             data.temps.forEach(row => row.forEach(v => { if (typeof v === 'number') vals.push(v); }));
             const vMin = vals.length ? Math.min(...vals) : 0;
             const vMax = vals.length ? Math.max(...vals) : 0;
-            const heatStyle = v => {
-                const t = vMax > vMin ? (v - vMin) / (vMax - vMin) : 0.5;
-                const hue = Math.round(120 * (1 - t)); // 120 = green, 0 = red
-                return ` style="background:hsl(${hue},62%,30%);color:#f5f7f9;font-weight:600;"`;
-            };
+            const cut = data.cutoff || { date: today, hour: 23 };
+            const isForecast = (d, h) => d > cut.date || (d === cut.date && h > cut.hour);
 
             for (let h = 0; h < 24; h++) {
                 html += `<tr><td class="time-col">${String(h).padStart(2, '0')}:00</td>`;
                 for (let d = 0; d < 7; d++) {
                     const v = data.temps[h][d];
-                    html += (v === null || v === undefined)
-                        ? '<td class="na">—</td>'
-                        : `<td${heatStyle(v)}>${fmtTemp(v)}</td>`;
+                    if (v === null || v === undefined) { html += '<td class="na">—</td>'; continue; }
+                    html += isForecast(data.days[d], h)
+                        ? `<td style="background:${heatColor(v, vMin, vMax, 0.35)};color:#b9c6d2;font-style:italic;">${fmtTemp(v, historyDecimals)}</td>`
+                        : `<td style="background:${heatColor(v, vMin, vMax)};color:#f5f7f9;font-weight:600;">${fmtTemp(v, historyDecimals)}</td>`;
                 }
                 html += '</tr>';
             }
@@ -1600,11 +1667,11 @@
             const sw = h => `<span class="swatch" style="background:hsl(${h},62%,30%)"></span>`;
             document.getElementById('historyLegend').innerHTML =
                 `<strong>Colour = position within this week's range:</strong> ` +
-                `${sw(120)} coldest (${fmtTemp(vals.length ? vMin : null)}) ` +
+                `${sw(120)} coldest (${fmtTemp(vals.length ? vMin : null, historyDecimals)}) ` +
                 `${sw(60)} middle ` +
-                `${sw(0)} warmest (${fmtTemp(vals.length ? vMax : null)})<br>` +
-                `${srcNote}<div class="note">Only hours that have already happened are shown — blank cells (—) have not happened yet. ` +
-                `Data: Open-Meteo ${data.endpoint}. Generated ${when}.</div>`;
+                `${sw(0)} warmest (${fmtTemp(vals.length ? vMax : null, historyDecimals)})<br>` +
+                `<strong>Solid + bold</strong> = already happened · <em>faded italic = model forecast</em> · blank (—) = beyond the ~16-day forecast horizon.<br>` +
+                `${srcNote}<div class="note">Data: Open-Meteo ${data.endpoint}. Generated ${when}.</div>`;
         }
 
         // ---- LIVE tab -----------------------------------------------------

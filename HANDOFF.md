@@ -1,10 +1,30 @@
 # Temperature Zephyr — Handoff Note
 
-**Date:** 2026-07-07 · **Current version:** 1.3.1 (main folder) · **Baseline:** 1.0.0 (`Temperature1.0/` — see note below)
+**Date:** 2026-07-07 · **Current version:** 1.4.0 (main folder) · **Baseline:** 1.0.0 (`Temperature1.0/` — see note below)
 
 A weather/temperature dashboard for Central European cities, used to support energy /
 power‑trading decisions (solar "FVE" output, wind generation, grid load). Node + Express
 backend, PostgreSQL cache, single‑file Chart.js front‑end, all data from Open‑Meteo.
+
+---
+
+## v1.4.0 addendum (2026-07-07)
+
+- **Graphs Source dropdown** — Global median (default) / Openmeteo for ALL lines.
+  `GET /api/weather/:city?source=median`: per-model fetches (forecast + previous-runs)
+  medianed per hour via `medianSeries` (pure, tested); in-memory cache 1 h
+  (`memMedianCache`) — Postgres stays best_match-only. First median load after a restart
+  fires ~10 upstream calls per city, then it's cached.
+- **History shows forecasts now** — weeks up to current+2; `buildHistoryTable` no longer
+  nulls future hours, the route returns `cutoff` {date, hour} and the UI renders
+  post-cutoff cells faded + italic. Blank = beyond the ~16-day model horizon. Global
+  median is the default source. NOTE: the "never shows forecasts" behaviour from 1.3.0
+  was deliberately dropped at the user's request.
+- **Table tab** — 2-hour rows, History-style heat colouring, Dec button (0/1/2 decimals,
+  0 default). History has the same Dec button. Both re-render from cached data.
+- Unit tests updated + extended (parseWeatherPayload, medianSeries, MEDIAN_MODELS);
+  mocked end-to-end boot re-verified. Live smoke test after deploy still recommended:
+  Graphs with both sources, History week current+1 (upcoming), `?source=median` route.
 
 ---
 
@@ -161,13 +181,16 @@ The pure/testable helpers in `server.js` are exported at the bottom (`getDateStr
 ## What each tab does
 
 - **Graphs** — two charts (Czech cities incl. a Czechia average; other cities). Legends are
-  **clickable** to hide/show lines (state persists across city changes).
-- **Table** — the same series numerically, every 4 hours.
+  **clickable** to hide/show lines (state persists across city changes). **Source**
+  dropdown (Global median default / Openmeteo) feeds all lines.
+- **Table** — the same series numerically, every 2 hours, heat-coloured, with a **Dec**
+  decimals toggle (0/1/2).
 - **🇨🇿 future / 🇭🇺 future** — 6‑day outlook per country (Prague/Budapest as proxies) with
   temp at 8/12/16/20/0 h, pressure/wind/weather/clouds/solar and auto notes. Column headers
   show **label / date / weekday**.
-- **📖 History** — city + week (ISO, 1 → current) + source dropdowns; 24×7 grid of actual
-  past hourly temperatures (Openmeteo best_match, or Global median of all sources).
+- **📖 History** — city + week (ISO, 1 → current+2) + source dropdowns (Global median
+  default); 24×7 grid — solid = happened, faded italic = model forecast (~16-day horizon);
+  **Dec** decimals toggle.
 - **⚡ LIVE** — right‑now snapshot for Prague, Brno, Budapest, Debrecen across Temperature,
   Wind, Rain/Storms, Pressure. Each shows the current value + **▲/▼/▬ vs the same hour
   yesterday**. Hover a category header for its **grid meaning**. Auto‑refreshes every 5 min.
@@ -177,7 +200,7 @@ The pure/testable helpers in `server.js` are exported at the bottom (`getDateStr
 | Route | Purpose |
 |-------|---------|
 | `GET /api/cities` | City list |
-| `GET /api/weather/:city` | Cached weather (auto‑refresh if > 1 h old) |
+| `GET /api/weather/:city?source=openmeteo\|median` | Cached weather (auto‑refresh if > 1 h old); `median` = per‑hour median of all sources |
 | `POST /api/fetch` | Force fresh fetch for all cities |
 | `GET /api/status` | Per‑city cache timestamps |
 | `GET /api/verify/:city` | Data sanity checks + ERA5 cross‑check |

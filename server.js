@@ -125,6 +125,17 @@ async function fetchWeatherFromAPI(city) {
       throw new Error('No hourly data in response');
     }
 
+    return parseWeatherPayload(data, prevData);
+  } catch (error) {
+    console.error(`Error fetching weather for ${city.name}:`, error.message);
+    return null;
+  }
+}
+
+// Pure: build the app's per-day series structure from raw Open-Meteo payloads
+// (`data` = forecast response, `prevData` = previous-runs response or null).
+// Exported for tests; reused by the Global-median fetcher below.
+function parseWeatherPayload(data, prevData) {
     // Parse the data into our days
     const days = {
       sevenDaysAgo: getDateString(-7),
@@ -206,10 +217,86 @@ async function fetchWeatherFromAPI(city) {
     result.pastDaysAvg = pastDaysAvg;
 
     return result;
-  } catch (error) {
-    console.error(`Error fetching weather for ${city.name}:`, error.message);
+}
+
+// ---------------------------------------------------------------------------
+// Global-median weather (Graphs tab "Source" selector)
+//
+// The same per-day series as fetchWeatherFromAPI, but every hour is the MEDIAN
+// across the implemented sources, fetched one model per call exactly like the
+// cross-check / History tab (a model with no coverage here is skipped — MET
+// Norway's Nordic domain does not reach these cities). The previous-runs
+// "Today Forecast" series is medianed the same way. Cached in memory only:
+// the Postgres cache stays reserved for the canonical best_match data.
+// ---------------------------------------------------------------------------
+
+const MEDIAN_MODELS = ['best_match', 'ecmwf_ifs025', 'icon_seamless', 'gfs_seamless', 'meteofrance_seamless', 'metno_seamless'];
+const memMedianCache = {};
+const MEDIAN_CACHE_MS = 60 * 60 * 1000; // same freshness rule as /api/weather
+
+// One model's forecast + previous-runs series. Returns null when the model
+// has no coverage (must not break the others).
+async function fetchModelPair(city, model) {
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${city.lat}&longitude=${city.lon}&hourly=temperature_2m&past_days=8&forecast_days=3&timezone=Europe%2FPrague&models=${model}`;
+  const prevUrl = `https://previous-runs-api.open-meteo.com/v1/forecast?latitude=${city.lat}&longitude=${city.lon}&hourly=temperature_2m_previous_day1&forecast_days=3&timezone=Europe%2FPrague&models=${model}`;
+  const grab = async (u, field) => {
+    const r = await fetch(u);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const raw = await r.json();
+    if (raw.error) throw new Error(raw.reason || 'API error');
+    const h = raw.hourly || {};
+    if (!Array.isArray(h.time) || !Array.isArray(h[field])) throw new Error(`no ${field}`);
+    return { time: h.time, values: h[field] };
+  };
+  const main = await grab(url, 'temperature_2m').catch(err => {
+    console.warn(`Median model ${model} skipped for ${city.name}: ${err.message}`);
     return null;
+  });
+  if (!main) return null;
+  const prev = await grab(prevUrl, 'temperature_2m_previous_day1').catch(() => null);
+  return { model, main, prev };
+}
+
+// Median-merge {time, values} series onto the first series' time grid.
+function medianSeries(seriesList) {
+  const maps = seriesList.map(s => {
+    const m = {};
+    for (let i = 0; i < s.time.length; i++) {
+      const v = s.values[i];
+      if (typeof v === 'number' && !Number.isNaN(v)) m[s.time[i]] = v;
+    }
+    return m;
+  });
+  const time = seriesList[0].time.slice();
+  return { time, values: time.map(t => medianOf(maps.map(m => m[t]))) };
+}
+
+async function fetchWeatherMedianFromAPI(city) {
+  const settled = await Promise.all(MEDIAN_MODELS.map(m => fetchModelPair(city, m)));
+  const okPairs = settled.filter(Boolean);
+  if (!okPairs.length) return null;
+
+  const main = medianSeries(okPairs.map(p => p.main));
+  const prevs = okPairs.map(p => p.prev).filter(Boolean);
+  let prevData = null;
+  if (prevs.length) {
+    const pm = medianSeries(prevs);
+    prevData = { hourly: { time: pm.time, temperature_2m_previous_day1: pm.values } };
   }
+
+  const result = parseWeatherPayload({ hourly: { time: main.time, temperature_2m: main.values } }, prevData);
+  if (result) result.sources = okPairs.map(p => p.model);
+  return result;
+}
+
+async function getMedianWeather(city) {
+  const c = memMedianCache[city.name];
+  if (c && (Date.now() - new Date(c.updatedAt).getTime()) < MEDIAN_CACHE_MS) return c;
+  const data = await fetchWeatherMedianFromAPI(city);
+  if (!data) return c || null; // stale beats nothing
+  const entry = { data, updatedAt: new Date() };
+  memMedianCache[city.name] = entry;
+  return entry;
 }
 
 // Store weather data in cache (memory always; DB when available)
@@ -1291,7 +1378,9 @@ app.get('/api/cities', (req, res) => {
   res.json(cities.map(c => c.name));
 });
 
-// Get weather data for a city
+// Get weather data for a city.
+// ?source=median -> per-hour median across all implemented sources (Graphs
+// tab "Global median"); anything else -> canonical best_match (DB cache).
 app.get('/api/weather/:city', async (req, res) => {
   const cityName = req.params.city;
 
@@ -1299,6 +1388,12 @@ app.get('/api/weather/:city', async (req, res) => {
   const city = cities.find(c => c.name === cityName);
   if (!city) {
     return res.status(404).json({ error: 'City not found' });
+  }
+
+  if (req.query.source === 'median') {
+    const entry = await getMedianWeather(city);
+    if (entry) return res.json(entry.data);
+    return res.status(500).json({ error: 'Could not fetch median weather data' });
   }
 
   // Try to get cached data first
@@ -1433,7 +1528,9 @@ app.get('/api/market/:country', async (req, res) => {
 // any model with no coverage for a location is skipped instead of failing the
 // whole request (MET Norway's Nordic domain does not reach CZ/HU — the
 // response's `sources` list shows what actually contributed). Hours that have
-// not happened yet are always null — forecast values are never shown here.
+// not happened yet are filled from the models' FORECASTS (up to ~16 days out;
+// the week dropdown goes to current+2), and the response's `cutoff` marks the
+// past/future boundary so the UI can render forecast cells visibly differently.
 // The date/median/table helpers below are pure and exported for unit tests.
 // ---------------------------------------------------------------------------
 
@@ -1449,6 +1546,7 @@ const HISTORY = {
   ARCHIVE_URL: 'https://historical-forecast-api.open-meteo.com/v1/forecast',
   FORECAST_URL: 'https://api.open-meteo.com/v1/forecast',
   ARCHIVE_LAG_DAYS: 3,                // archive may miss the newest days
+  FUTURE_WEEKS: 2,                    // week dropdown reaches current + this
   CACHE_MS_PAST: 6 * 60 * 60 * 1000,  // finished weeks barely change
   CACHE_MS_CURRENT: 15 * 60 * 1000,   // current week fills in as hours pass
 };
@@ -1516,15 +1614,14 @@ function nowInTz(tz) {
 // Pure: assemble the 24×7 matrix from per-source hourly maps.
 //   perSource: [{ id, label, values: { 'YYYY-MM-DDTHH:00': number } }]
 //   days:      the week's 7 'YYYY-MM-DD' dates (Mon..Sun)
-//   cutoff:    { date, hour } — cells after this moment stay null
 //   mode:      'openmeteo' (best_match only) | 'median' (all sources)
+// Fills every hour a source can supply — including future (forecast) hours;
+// the caller reports the past/future boundary separately (`cutoff`).
 // Returns { temps: (number|null)[24][7], sources: [{ id, label, hours }] }
-// where `hours` counts the already-happened cells that source supplied.
-function buildHistoryTable(perSource, days, cutoff, mode) {
+// where `hours` counts the cells that source supplied.
+function buildHistoryTable(perSource, days, mode) {
   const list = (perSource || []).filter(s => s && s.values);
   const used = mode === 'median' ? list : list.filter(s => s.id === 'best_match');
-  const happened = (date, h) =>
-    date < cutoff.date || (date === cutoff.date && h <= cutoff.hour);
 
   const counts = {};
   const temps = [];
@@ -1532,7 +1629,6 @@ function buildHistoryTable(perSource, days, cutoff, mode) {
     const row = [];
     for (let d = 0; d < 7; d++) {
       const date = days[d];
-      if (!happened(date, h)) { row.push(null); continue; }
       const key = `${date}T${String(h).padStart(2, '0')}:00`;
       const vals = [];
       for (const s of used) {
@@ -1556,12 +1652,12 @@ function buildHistoryTable(perSource, days, cutoff, mode) {
 
 // One source for one week. Returns { id, label, values } or null on any
 // failure (a missing model must not break the others).
-async function fetchHistorySource(city, src, days, tz, recentDays) {
+async function fetchHistorySource(city, src, days, tz, recentDays, forecastDays) {
   const base = `latitude=${city.lat}&longitude=${city.lon}&hourly=temperature_2m` +
                `&models=${src.id}&timezone=${encodeURIComponent(tz)}`;
   const url = (recentDays === null)
     ? `${HISTORY.ARCHIVE_URL}?${base}&start_date=${days[0]}&end_date=${days[6]}`
-    : `${HISTORY.FORECAST_URL}?${base}&past_days=${recentDays}&forecast_days=1`;
+    : `${HISTORY.FORECAST_URL}?${base}&past_days=${recentDays}&forecast_days=${forecastDays}`;
   try {
     const r = await fetch(url);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -1599,27 +1695,32 @@ async function fetchHistory(city, week, source) {
   if (cached && (Date.now() - cached.ts) < ttl) return cached.result;
 
   // Finished long enough ago -> stable archive; otherwise the forecast
-  // endpoint's past_days (which always has the newest hours).
+  // endpoint with past_days for the elapsed part and forecast_days through
+  // the end of the requested week (Open-Meteo caps forecasts at 16 days, so
+  // the far end of week current+2 may stay blank).
   const useArchive = daysBetween(days[6], now.date) > HISTORY.ARCHIVE_LAG_DAYS;
   const recentDays = useArchive ? null
-    : Math.min(92, Math.max(1, daysBetween(days[0], now.date)));
+    : Math.min(92, Math.max(0, daysBetween(days[0], now.date)));
+  const forecastDays = useArchive ? 1
+    : Math.min(16, Math.max(1, daysBetween(now.date, days[6]) + 1));
 
   const wanted = source === 'median'
     ? HISTORY.SOURCES
     : HISTORY.SOURCES.filter(s => s.id === 'best_match');
   const settled = await Promise.all(
-    wanted.map(s => fetchHistorySource(city, s, days, tz, recentDays))
+    wanted.map(s => fetchHistorySource(city, s, days, tz, recentDays, forecastDays))
   );
   const perSource = settled.filter(Boolean);
   if (!perSource.length) throw new Error('No history source responded');
 
-  const { temps, sources } = buildHistoryTable(perSource, days, now, source);
+  const { temps, sources } = buildHistoryTable(perSource, days, source);
 
   const result = {
     city: city.name,
     year, week, start: days[0], end: days[6], days,
     source,
     sources,
+    cutoff: now, // past/future boundary — cells after this are forecasts
     endpoint: useArchive ? 'historical-forecast archive' : 'forecast past_days',
     units: { temp: '°C' },
     generatedAt: new Date().toISOString(),
@@ -1642,8 +1743,9 @@ app.get('/api/history/:city', async (req, res) => {
   const tz = PREP_TZ[city.name] || APP_TIMEZONE;
   const cur = isoWeekOf(nowInTz(tz).date);
   const week = parseInt(req.query.week, 10);
-  if (!Number.isInteger(week) || week < 1 || week > cur.week) {
-    return res.status(400).json({ error: `week must be between 1 and ${cur.week}` });
+  const maxWeek = cur.week + HISTORY.FUTURE_WEEKS;
+  if (!Number.isInteger(week) || week < 1 || week > maxWeek) {
+    return res.status(400).json({ error: `week must be between 1 and ${maxWeek}` });
   }
   try {
     res.json(await fetchHistory(city, week, source));
@@ -1687,5 +1789,6 @@ module.exports = {
   parseMarketCity, buildMarketBrief, windPowerAt, windPowerIndex, solarIndex,
   degreeDays, signalDir, MARKET,
   addDays, daysBetween, isoWeekOf, isoWeekDates, medianOf, nowInTz,
-  buildHistoryTable, HISTORY
+  buildHistoryTable, HISTORY,
+  parseWeatherPayload, medianSeries, MEDIAN_MODELS
 };

@@ -49,32 +49,64 @@ const PER_SOURCE = [
   SRC('best_match', 'Open-Meteo', { '2026-07-06T00:00': 20, '2026-07-07T05:00': 10 }),
   SRC('ecmwf_ifs025', 'ECMWF',    { '2026-07-06T00:00': 22, '2026-07-07T05:00': 14, '2026-07-09T03:00': 9 }),
 ];
-const CUT = { date: '2026-07-07', hour: 12 };
 
-test('buildHistoryTable: median mode', () => {
-  const r = s.buildHistoryTable(PER_SOURCE, DAYS, CUT, 'median');
+test('buildHistoryTable: median mode fills everything a source supplies', () => {
+  const r = s.buildHistoryTable(PER_SOURCE, DAYS, 'median');
   assert.equal(r.temps.length, 24);
   assert.equal(r.temps[0].length, 7);
   assert.equal(r.temps[0][0], 21);    // median(20, 22)
   assert.equal(r.temps[5][1], 12);    // median(10, 14)
-  assert.equal(r.temps[3][3], null);  // Thursday value is after the cutoff
-  assert.equal(r.temps[13][1], null); // 13:00 today > cutoff hour 12
+  assert.equal(r.temps[3][3], 9);     // single-source (forecast) hour kept
+  assert.equal(r.temps[13][1], null); // no source supplied this hour
   assert.equal(r.sources.length, 2);
-  assert.equal(r.sources[1].hours, 2); // ECMWF's Thursday point not counted
+  assert.equal(r.sources[1].hours, 3); // ECMWF: all three points counted
 });
 
 test('buildHistoryTable: openmeteo mode uses best_match only', () => {
-  const r = s.buildHistoryTable(PER_SOURCE, DAYS, CUT, 'openmeteo');
+  const r = s.buildHistoryTable(PER_SOURCE, DAYS, 'openmeteo');
   assert.equal(r.temps[0][0], 20);
   assert.equal(r.temps[5][1], 10);
+  assert.equal(r.temps[3][3], null);  // ECMWF-only hour ignored in this mode
   assert.equal(r.sources.length, 1);
   assert.equal(r.sources[0].id, 'best_match');
 });
 
 test('buildHistoryTable: no sources -> all-null grid', () => {
-  const r = s.buildHistoryTable([], DAYS, CUT, 'median');
+  const r = s.buildHistoryTable([], DAYS, 'median');
   assert.equal(r.temps.every(row => row.every(v => v === null)), true);
   assert.deepEqual(r.sources, []);
+});
+
+// ---- weather payload parsing + median helpers --------------------------------
+
+test('parseWeatherPayload: maps hours to day series incl. previous-run forecast', () => {
+  const today = s.getDateString(0), yest = s.getDateString(-1);
+  const mk = (d, h) => `${d}T${String(h).padStart(2, '0')}:00`;
+  const data = { hourly: { time: [mk(yest, 5), mk(today, 5)], temperature_2m: [10, 20] } };
+  const prev = { hourly: { time: [mk(today, 5)], temperature_2m_previous_day1: [17] } };
+  const r = s.parseWeatherPayload(data, prev);
+  assert.equal(r.yesterday.temps[5], 10);
+  assert.equal(r.today.temps[5], 20);
+  assert.equal(r.todayForecast.temps[5], 17);
+  assert.equal(r.tomorrow.temps[5], null);
+});
+
+test('medianSeries: per-timestamp median on the first grid, junk ignored', () => {
+  const a = { time: ['t1', 't2', 't3'], values: [10, 20, 30] };
+  const b = { time: ['t1', 't2'], values: [14, null] };
+  const c = { time: ['t1', 't2', 't3'], values: [12, 26, NaN] };
+  const m = s.medianSeries([a, b, c]);
+  assert.deepEqual(m.time, ['t1', 't2', 't3']);
+  assert.equal(m.values[0], 12);   // median(10, 14, 12)
+  assert.equal(m.values[1], 23);   // median(20, 26)
+  assert.equal(m.values[2], 30);   // only one real value
+});
+
+test('MEDIAN_MODELS covers all six implemented sources', () => {
+  assert.deepEqual(s.MEDIAN_MODELS, [
+    'best_match', 'ecmwf_ifs025', 'icon_seamless',
+    'gfs_seamless', 'meteofrance_seamless', 'metno_seamless'
+  ]);
 });
 
 test('HISTORY config lists all six implemented sources', () => {

@@ -20,7 +20,8 @@ blank, and downloaded data is cross‑checked against an independent reanalysis 
 - **Clickable legends** — click (or keyboard Enter/Space on) any legend item to hide/show
   that line. Each chart toggles independently and remembers your choices when you switch
   cities.
-- **Data table** — the same series shown numerically every 4 hours.
+- **Data table** — the same series shown numerically every 2 hours, heat‑coloured like the
+  History tab, with a **Dec** button cycling 0/1/2 decimal places (0 default).
 - **🇨🇿 future / 🇭🇺 future overviews** — a 6‑day table per country (Prague = CZ proxy,
   Budapest = HU proxy) with temperatures at 8:00 / 12:00 / 16:00 / 20:00 / 0:00, pressure,
   wind, sky condition, cloud cover, solar (FVE) potential and auto‑generated notes. Column headers show **label / date /
@@ -236,7 +237,7 @@ generation, faults). The tab auto‑refreshes every 5 minutes while open. Served
 | Method | Route | Description |
 |--------|-------|-------------|
 | `GET`  | `/api/cities` | List of configured city names |
-| `GET`  | `/api/weather/:city` | Cached weather for a city (auto‑refreshes if > 1 h old) |
+| `GET`  | `/api/weather/:city?source=openmeteo\|median` | Cached weather for a city (auto‑refreshes if > 1 h old); `median` = per‑hour median of all implemented sources |
 | `POST` | `/api/fetch` | Force a fresh fetch for **all** cities |
 | `GET`  | `/api/status` | Cache status (per‑city `updated_at`) |
 | `GET`  | `/api/verify/:city` | Run/return the data‑verification checks |
@@ -244,7 +245,7 @@ generation, faults). The tab auto‑refreshes every 5 minutes while open. Served
 | `GET`  | `/api/crosscheck/:city` | Cross‑check today's shown values vs independent models + MET Norway |
 | `GET`  | `/api/live/:city` | Right‑now snapshot + direction vs the same hour yesterday |
 | `GET`  | `/api/market/:country` | Power‑market weather brief for `CZ` or `HU` (demand / solar / wind / risks) |
-| `GET`  | `/api/history/:city?week=N&source=openmeteo\|median` | Hour‑by‑hour actual temperatures for ISO week `N` of this year |
+| `GET`  | `/api/history/:city?week=N&source=openmeteo\|median` | Hour‑by‑hour temperatures for ISO week `N` (1 → current+2); hours past `cutoff` are model forecasts |
 
 ---
 
@@ -293,6 +294,22 @@ fetches all cities, and schedules a refresh every 6 hours.
 ---
 
 ## Changelog
+
+### v1.4.0 — July 2026 — median everywhere, forecasts in History, Dec buttons
+- **Graphs: Source dropdown.** Global median (default) or Openmeteo, feeding **all** lines
+  including the Czechia average and the previous‑run "Today Forecast" series. Median data
+  is fetched one model per call (ECMWF, DWD ICON, NOAA GFS, Météo‑France, MET Norway,
+  best_match — no‑coverage models skipped) and medianed per hour; served by
+  `GET /api/weather/:city?source=median`, cached in memory for 1 h.
+- **History: future weeks.** The week dropdown now reaches **current + 2**; hours that have
+  not happened yet are filled from the models' forecasts (up to Open‑Meteo's ~16‑day
+  horizon) and rendered **faded + italic** so they can never be mistaken for actuals; the
+  API responds with a `cutoff` marking the boundary. **Global median is now the default
+  source.**
+- **Table: every 2 hours + heat map.** Rows at 2‑hour steps (was 4), and the same
+  green→red heat colouring as History, scaled to the values on screen.
+- **Dec buttons.** History and Table each get a top‑right **Dec** button cycling
+  0 → 1 → 2 decimal places (0 default), re‑rendering instantly from cached data.
 
 ### v1.3.1 — July 2026 — SVG flags, History heat map
 - **Flag rendering fixed for real.** The v1.3.0 webfont approach failed in practice:
