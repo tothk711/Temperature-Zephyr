@@ -1,0 +1,5 @@
+Temperature Zephyr - Weather Comparison 2.0
+App version: 2.0.0 (see README changelog)
+Date: 2026-07-11
+Status: verified working (22 unit tests, 14 e2e checks vs mocked API)
+Run it: npm install && npm start

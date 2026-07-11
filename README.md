@@ -3,7 +3,7 @@
 A weather temperature comparison dashboard for Central European cities, built to support
 energy / power‑trading decisions. It pulls hourly temperatures and short‑range forecasts
 from [Open‑Meteo](https://open-meteo.com/), caches them in PostgreSQL, and renders them as
-interactive charts, a data table, and 5‑day "what's coming" overviews for Czechia and
+interactive charts, a data table, hour‑by‑hour history, and 6‑day "what's coming" overviews for Czechia and
 Hungary (with a focus on solar / FVE output potential).
 
 The app intentionally **never invents data**: anything Open‑Meteo does not return is left
@@ -20,12 +20,19 @@ blank, and downloaded data is cross‑checked against an independent reanalysis 
 - **Clickable legends** — click (or keyboard Enter/Space on) any legend item to hide/show
   that line. Each chart toggles independently and remembers your choices when you switch
   cities.
-- **Data table** — the same series shown numerically every 4 hours.
-- **CZ future / HU future overviews** — a 5‑day table per country (Prague = CZ proxy,
-  Budapest = HU proxy) with temperatures, pressure, wind, sky condition, cloud cover,
-  solar (FVE) potential and auto‑generated notes. Column headers show **label / date /
+- **Data table** — the same series shown numerically every 2 hours, heat‑coloured like the
+  History tab, with a **Dec** button cycling 0/1/2 decimal places (0 default).
+- **🇨🇿 future / 🇭🇺 future overviews** — a 6‑day table per country (Prague = CZ proxy,
+  Budapest = HU proxy) with temperatures at 8:00 / 12:00 / 16:00 / 20:00 / 0:00, pressure,
+  wind, sky condition, cloud cover, solar (FVE) potential and auto‑generated notes. Column headers show **label / date /
   weekday name** (e.g. `Today / 2026-06-25 / Thursday`). Day‑over‑day changes are colour‑coded
   for solar output.
+- **📖 History tab** — pick a city, an ISO week of this year (1 → current) and a source,
+  and get the actual past temperatures for every hour that has already happened: 24 rows
+  (hours) × 7 columns (Mon–Sun). Source is either **Openmeteo** (best_match) or the
+  **Global median** — the per‑hour median of all implemented sources (ECMWF, DWD ICON,
+  NOAA GFS, Météo‑France, MET Norway, Open‑Meteo); sources with no coverage for a city
+  are skipped automatically and the footer lists what was actually used.
 - **Built‑in data verification** — each city shows a badge summarising automated sanity
   checks, including a cross‑check against Open‑Meteo's ERA5 reanalysis archive.
 - **LIVE tab** — a right‑now snapshot for Prague, Brno, Budapest and Debrecen across
@@ -108,7 +115,7 @@ https://previous-runs-api.open-meteo.com/v1/forecast?latitude=47.5&longitude=19.
 
 **CZ / HU future overview** (note the local `Europe/Budapest` timezone and extra fields):
 ```
-https://api.open-meteo.com/v1/forecast?latitude=47.5&longitude=19.04&hourly=temperature_2m,cloud_cover,pressure_msl,wind_gusts_10m,shortwave_radiation,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min,shortwave_radiation_sum,precipitation_sum,wind_gusts_10m_max,sunshine_duration&forecast_days=5&timezone=Europe%2FBudapest&wind_speed_unit=kmh
+https://api.open-meteo.com/v1/forecast?latitude=47.5&longitude=19.04&hourly=temperature_2m,cloud_cover,pressure_msl,wind_gusts_10m,shortwave_radiation,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min,shortwave_radiation_sum,precipitation_sum,wind_gusts_10m_max,sunshine_duration&forecast_days=6&timezone=Europe%2FBudapest&wind_speed_unit=kmh
 ```
 
 **ERA5 archive** (independent cross‑check used by data verification):
@@ -230,14 +237,16 @@ generation, faults). The tab auto‑refreshes every 5 minutes while open. Served
 | Method | Route | Description |
 |--------|-------|-------------|
 | `GET`  | `/api/cities` | List of configured city names |
-| `GET`  | `/api/weather/:city` | Cached weather for a city (auto‑refreshes if > 1 h old) |
+| `GET`  | `/api/weather/:city?source=openmeteo\|median` | Cached weather for a city (auto‑refreshes if > 1 h old); `median` = per‑hour median of all implemented sources |
 | `POST` | `/api/fetch` | Force a fresh fetch for **all** cities |
 | `GET`  | `/api/status` | Cache status (per‑city `updated_at`) |
 | `GET`  | `/api/verify/:city` | Run/return the data‑verification checks |
-| `GET`  | `/api/preparation/:city` | 5‑day "future" overview for a capital |
+| `GET`  | `/api/preparation/:city` | 6‑day "future" overview for a capital |
 | `GET`  | `/api/crosscheck/:city` | Cross‑check today's shown values vs independent models + MET Norway |
 | `GET`  | `/api/live/:city` | Right‑now snapshot + direction vs the same hour yesterday |
+| `GET`  | `/api/revisions/:city` | Forecast revision vs yesterday’s model run (today + tomorrow; `?source=median`) |
 | `GET`  | `/api/market/:country` | Power‑market weather brief for `CZ` or `HU` (demand / solar / wind / risks) |
+| `GET`  | `/api/history/:city?week=N&source=openmeteo\|median` | Hour‑by‑hour temperatures for ISO week `N` (1 → current+2); hours past `cutoff` are model forecasts |
 
 ---
 
@@ -286,6 +295,113 @@ fetches all cities, and schedules a refresh every 6 hours.
 ---
 
 ## Changelog
+
+### v2.0.0 — July 2026 — Weather Comparison 2.0
+Rebased on the GitHub main line (v1.4.1) and ported the parallel-branch features:
+
+- **Forecast‑revision tracking.** `parseWeatherPayload` now also stores what yesterday's run
+  predicted for **tomorrow** (`tomorrowForecast`) — for best_match *and* the Global‑median
+  source. New chart line `Tomorrow Fc (prev run)`, new Table columns, a revision strip under
+  each chart (amber when the average revision is ≥ 1.5 °C — a market‑moving move), a
+  `🔮 Fc stability` row in the Market tab, and `GET /api/revisions/:city[?source=median]`
+  (avg / peak‑hours / max revision for today + tomorrow).
+- **Cross‑check + consensus correction extended to tomorrow.** The Tomorrow line is now
+  validated exactly like Today (outliers vs a tight consensus replaced, cyan ◆; genuine
+  disagreements flagged, amber ▲), plus a **model‑agreement** metric (mean spread between
+  ECMWF / ICON / GFS / Météo‑France / MET Norway) for both days. In the v1.4.1 spirit, the
+  four model fetches were **batched into one request** (cross‑check is now 2 upstream calls
+  per city instead of 5).
+- **Frozen history (write‑once past).** Once a day is 2+ days old its cached values never
+  change (matching by date, gap‑filling holes, recomputing the past average) — historic
+  lines can no longer drift between refreshes. Applies to both the best_match cache and the
+  Global‑median cache. Yesterday/today still update. Disable with `FREEZE_PAST=0`.
+- **History (and Table) forecast cells are readable now.** The faded 35 %‑opacity forecast
+  rendering was hard to read; forecast values now use the **same hue as a light cell with
+  dark italic text** — full readability, and the light/dark flip separates model data from
+  actuals at a glance. The Market tab's Yesterday column lost its 55 % fade too (tinted
+  "actual" column instead).
+- **Branding:** app renamed to **Weather Comparison 2.0** (header + browser tab).
+- **Tests:** 22 offline unit tests; booted end‑to‑end against the mocked API (all routes).
+
+
+### v1.4.1 — July 2026 — rate-limit fix (the "everything broke" release)
+v1.4.0's Global‑median fetched **one model per call** — up to 12 requests per city — and
+promptly tripped Open‑Meteo's rate limits on `api.open-meteo.com`. Since Market, LIVE,
+the future tabs and History weeks ≥ current−1 all share that host, they all failed at
+once (archive‑served weeks kept working, which is how the culprit was found), and
+"Refresh All Data" hung on stalled connections. Fixes:
+
+- **Batched model requests.** Median weather is now **2 calls** per city (forecast +
+  previous‑runs, all models in one `models=a,b,c` request, suffixed variables parsed);
+  History median is **1 call**. `metno_seamless` was dropped from the model lists — it has
+  no coverage for any of our cities, so it only burned quota (the real MET Norway API is
+  still used by the cross‑check).
+- **15‑second timeout on every upstream request** (`tFetch`) — nothing can hang a route,
+  or "Refresh All Data", for minutes any more. The refresh also fetches all cities in
+  parallel instead of sequentially with delays.
+- **Stale‑over‑error everywhere.** Preparation, History, LIVE and Market now serve the
+  last good result when a fresh fetch fails, instead of blanking the tab.
+- **In‑flight coalescing** for median weather (the Czechia average asks for 4 cities at
+  once; simultaneous requests for the same city now share one fetch).
+- **Version snapshots.** Working releases are frozen into `Versions/<n>/` folders
+  (git‑ignored). `Versions/1.0/` = this release. If the app misbehaves after a change,
+  run the snapshot instead and compare.
+
+Note: if Open‑Meteo's **daily** quota was exhausted by the incident, some tabs may stay
+degraded until the quota resets at midnight UTC — the app now survives that gracefully.
+
+### v1.4.0 — July 2026 — median everywhere, forecasts in History, Dec buttons
+- **Graphs: Source dropdown.** Global median (default) or Openmeteo, feeding **all** lines
+  including the Czechia average and the previous‑run "Today Forecast" series. Median data
+  is fetched one model per call (ECMWF, DWD ICON, NOAA GFS, Météo‑France, MET Norway,
+  best_match — no‑coverage models skipped) and medianed per hour; served by
+  `GET /api/weather/:city?source=median`, cached in memory for 1 h.
+- **History: future weeks.** The week dropdown now reaches **current + 2**; hours that have
+  not happened yet are filled from the models' forecasts (up to Open‑Meteo's ~16‑day
+  horizon) and rendered **faded + italic** so they can never be mistaken for actuals; the
+  API responds with a `cutoff` marking the boundary. **Global median is now the default
+  source.**
+- **Table: every 2 hours + heat map.** Rows at 2‑hour steps (was 4), and the same
+  green→red heat colouring as History, scaled to the values on screen.
+- **Dec buttons.** History and Table each get a top‑right **Dec** button cycling
+  0 → 1 → 2 decimal places (0 default), re‑rendering instantly from cached data.
+
+### v1.3.1 — July 2026 — SVG flags, History heat map
+- **Flag rendering fixed for real.** The v1.3.0 webfont approach failed in practice:
+  `<button>` elements don't inherit the page font, and Windows has no native flag glyphs,
+  so the tabs still showed "CZ"/"HU". The tabs and the future‑tab captions now use tiny
+  **inline SVG flags** — vector shapes, no font, no CDN, render identically everywhere.
+  The webfont was removed.
+- **History heat map.** Every filled cell in the 📖 History table is colour‑coded within
+  the displayed week: coldest hour = dark green background, warmest = dark red, hue
+  gradient (green → yellow → orange → red) in between, with light text for contrast.
+  The footer legend shows the scale with the week's actual min/max.
+
+### v1.3.0 — July 2026 — History tab, 6‑day outlook, flag tabs
+- **📖 History tab.** Pick a **city** (all eight), an **ISO week of this year** (1 → the
+  current week) and a **source**, and see the actual temperature for every hour that has
+  already happened in that week — 24 hourly rows × 7 day columns (Mon–Sun). Hours still in
+  the future stay blank: this tab never shows forecast values. Sources: **Openmeteo**
+  (best_match) or **Global median** — the per‑hour median of ECMWF, DWD ICON, NOAA GFS,
+  Météo‑France, MET Norway and Open‑Meteo. Models are fetched one per call (same pattern
+  as the cross‑check), so a source with no coverage (MET Norway's Nordic model does not
+  reach CZ/HU) is skipped automatically and the footer lists what was actually used.
+  Finished weeks come from Open‑Meteo's **Historical Forecast archive**; weeks touching
+  the last ~3 days use the forecast endpoint's `past_days` so the newest hours are present.
+  Served by `GET /api/history/:city?week=N&source=openmeteo|median` (in‑memory cache:
+  6 h for finished weeks, 15 min for the current one).
+- **Future tabs: one more day.** The CZ/HU outlook now covers **6 days** (Today → D+5).
+- **Future tabs: 12:00 and 20:00 rows.** Temperature rows are now 8:00 / 12:00 / 16:00 /
+  20:00 / 0:00, in chronological order.
+- **Flag tabs.** "CZ future" / "HU future" are now **🇨🇿 future / 🇭🇺 future**. Windows has no
+  native flag‑emoji glyphs (the tabs would show plain "CZ"/"HU" letters), so the page loads
+  a tiny Twemoji **country‑flags subset font** from the same pinned jsDelivr CDN as
+  Chart.js, restricted via `unicode-range` to flag codepoints only. If the CDN is
+  unreachable the tabs degrade to the letters CZ / HU.
+- **Tests restored.** `npm test` (offline unit tests in `tests/`) covers the new ISO‑week /
+  median / table‑assembly helpers and the 6‑day parser. `tests/mock-fetch.js` lets you boot
+  the whole app against a synthetic Open‑Meteo for smoke tests:
+  `node --require ./tests/mock-fetch.js server.js`.
 
 ### v1.2.0 — July 2026 — consensus correction, Market brief, hardening
 - **Consensus correction (cross‑check upgrade).** The cross‑check no longer only flags bad

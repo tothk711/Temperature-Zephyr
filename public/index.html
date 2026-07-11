@@ -3,12 +3,24 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Weather Comparison</title>
+    <title>Weather Comparison 2.0</title>
     <!-- Pinned to known-good versions. Do NOT change to unversioned "latest"
          URLs: an upstream major release could silently break the charts. -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.1.0/dist/chartjs-plugin-annotation.min.js"></script>
     <style>
+        /* Country flags as inline SVG (tab labels + future-tab captions).
+           Emoji flags are unreliable here: Windows ships no flag-emoji glyphs
+           and <button> elements do not inherit the page font, so a webfont
+           polyfill fails exactly where the flags live. Vector shapes render
+           identically on every OS with zero dependencies. */
+        .flag {
+            width: 1.15em;
+            height: 0.77em;
+            vertical-align: -0.08em;
+            border-radius: 2px;
+        }
+
         * {
             margin: 0;
             padding: 0;
@@ -196,6 +208,12 @@
             border-bottom-style: dashed;
         }
 
+        .legend-line.dotted-cyan {
+            border-color: #00CED1;
+            border-bottom-style: dotted;
+            border-bottom-width: 2px;
+        }
+
         .legend-line.dotted-light-green {
             border-color: #90EE90;
             border-bottom-style: dotted;
@@ -335,6 +353,18 @@
             cursor: pointer;
             outline: none;
         }
+
+        .dec-btn {
+            margin-left: auto;
+            padding: 8px 14px;
+            font-size: 0.85rem;
+            border: none;
+            border-radius: 8px;
+            background: #0f3460;
+            color: #eee;
+            cursor: pointer;
+        }
+        .dec-btn:hover { background: #1a4a7a; }
 
         .table-scroll { overflow-x: auto; }
 
@@ -593,7 +623,25 @@
         }
 
         /* Yesterday column is context, not a trade signal */
-        table.market-table .ctx { opacity: 0.55; }
+        /* Yesterday column is context (actual), not a trade signal: NOT dimmed
+           (opacity killed readability) — separated by a background tint and an
+           "actual" tag instead, text stays fully readable. */
+        table.market-table th.ctx, table.market-table td.ctx {
+            background: rgba(255, 255, 255, 0.045);
+            border-right: 2px solid rgba(78, 204, 163, 0.35);
+        }
+        .actual-tag {
+            display: block; font-size: 0.62rem; font-weight: 700;
+            color: #8fa3b8; letter-spacing: 0.04em;
+        }
+
+        /* Forecast-revision strip under each chart header */
+        .rev-strip {
+            margin: 2px 0 8px; text-align: center; font-size: 0.74rem;
+            color: #9fb0c3; min-height: 1.1em; line-height: 1.5;
+        }
+        .rev-strip b { color: #eaf2ff; }
+        .rev-hot { color: #e9b44c; font-weight: 700; }
 
         .mk-big { font-size: 1.15rem; font-weight: 700; color: #eaf2ff; display: block; line-height: 1.2; }
         .mk-sub { font-size: 0.7rem; color: #9fb0c3; display: block; margin-top: 2px; }
@@ -638,7 +686,7 @@
 <body>
     <div class="container">
         <header>
-            <h1>🌡️ Weather Comparison</h1>
+            <h1>🌡️ Weather Comparison 2.0</h1>
             <div class="today-date" id="todayDate">Loading...</div>
         </header>
 
@@ -649,13 +697,21 @@
         <div class="tabs">
             <button class="tab-btn active" id="tabGraphs" onclick="showTab('graphs')">📊 Graphs</button>
             <button class="tab-btn" id="tabTable" onclick="showTab('table')">📋 Table</button>
-            <button class="tab-btn" id="tabCzPrep" onclick="showTab('czprep')">CZ future</button>
-            <button class="tab-btn" id="tabHuPrep" onclick="showTab('huprep')">HU future</button>
+            <button class="tab-btn" id="tabCzPrep" onclick="showTab('czprep')"><svg class="flag" viewBox="0 0 900 600" aria-hidden="true"><rect width="900" height="600" fill="#fff"/><rect y="300" width="900" height="300" fill="#d7141a"/><path d="M0 0 450 300 0 600Z" fill="#11457e"/></svg> future</button>
+            <button class="tab-btn" id="tabHuPrep" onclick="showTab('huprep')"><svg class="flag" viewBox="0 0 900 600" aria-hidden="true"><rect width="900" height="600" fill="#436f4d"/><rect width="900" height="400" fill="#fff"/><rect width="900" height="200" fill="#cd2a3e"/></svg> future</button>
+            <button class="tab-btn" id="tabHistory" onclick="showTab('history')">📖 History</button>
             <button class="tab-btn" id="tabLive" onclick="showTab('live')">⚡ LIVE</button>
             <button class="tab-btn" id="tabMarket" onclick="showTab('market')">📈 Market</button>
         </div>
 
       <div id="graphsView">
+        <div class="table-controls">
+            <label for="graphSourceSelect">Source:</label>
+            <select id="graphSourceSelect">
+                <option value="median" selected>Global median</option>
+                <option value="openmeteo">Openmeteo</option>
+            </select>
+        </div>
         <div class="graphs-container">
             <!-- Left Graph - Czech Cities -->
             <div class="chart-panel">
@@ -667,6 +723,7 @@
                 </div>
                 <div class="verify-details" id="leftVerifyDetails"></div>
                 <div class="verify-details" id="leftConfidenceDetails"></div>
+                <div class="rev-strip"><span id="leftRevText"></span><span id="leftAgreeText"></span></div>
                 <div class="chart-wrapper">
                     <canvas id="leftChart"></canvas>
                 </div>
@@ -696,6 +753,10 @@
                         <span>Tomorrow</span>
                     </div>
                     <div class="legend-item">
+                        <div class="legend-line dotted-cyan"></div>
+                        <span>Tomorrow Fc</span>
+                    </div>
+                    <div class="legend-item">
                         <div class="legend-line dotted-light-green"></div>
                         <span>Day After</span>
                     </div>
@@ -712,6 +773,7 @@
                 </div>
                 <div class="verify-details" id="rightVerifyDetails"></div>
                 <div class="verify-details" id="rightConfidenceDetails"></div>
+                <div class="rev-strip"><span id="rightRevText"></span><span id="rightAgreeText"></span></div>
                 <div class="chart-wrapper">
                     <canvas id="rightChart"></canvas>
                 </div>
@@ -741,6 +803,10 @@
                         <span>Tomorrow</span>
                     </div>
                     <div class="legend-item">
+                        <div class="legend-line dotted-cyan"></div>
+                        <span>Tomorrow Fc</span>
+                    </div>
+                    <div class="legend-item">
                         <div class="legend-line dotted-light-green"></div>
                         <span>Day After</span>
                     </div>
@@ -755,6 +821,7 @@
                 <label for="tableCitySelect">City:</label>
                 <select id="tableCitySelect"></select>
                 <span class="verify-badge checking" id="tableVerify" onclick="toggleDetails('table')">⏳ Checking…</span>
+                <button class="dec-btn" id="tableDecBtn" title="Decimal places — click to cycle 0/1/2">Dec 0</button>
             </div>
             <div class="verify-details" id="tableVerifyDetails"></div>
             <div class="table-scroll">
@@ -780,6 +847,24 @@
             <div class="prep-legend" id="huPrepLegend"></div>
         </div>
       </div><!-- /huPrepView -->
+
+      <div id="historyView" style="display:none;">
+        <div class="table-panel">
+            <div class="table-controls">
+                <label for="historyCitySelect">City:</label>
+                <select id="historyCitySelect"></select>
+                <label for="historyWeekSelect">Week:</label>
+                <select id="historyWeekSelect"></select>
+                <label for="historySourceSelect">Source:</label>
+                <select id="historySourceSelect"></select>
+                <button class="dec-btn" id="historyDecBtn" title="Decimal places — click to cycle 0/1/2">Dec 0</button>
+            </div>
+            <div class="table-scroll">
+                <div id="historyContainer"></div>
+            </div>
+            <div class="prep-legend" id="historyLegend"></div>
+        </div>
+      </div><!-- /historyView -->
 
       <div id="liveView" style="display:none;">
         <div class="table-panel">
@@ -816,6 +901,7 @@
         // Current selections
         let leftCity = 'Czechia';
         let rightCity = 'Budapest';
+        let graphSource = 'median'; // feeds ALL chart lines (median | openmeteo)
 
         // Cache for city data (for calculating Czechia average)
         let cityDataCache = {};
@@ -825,7 +911,13 @@
             updateTodayDate();
             setupDropdowns();
             setupTable();
+            setupHistory();
             setupLegends();
+            document.getElementById('graphSourceSelect').addEventListener('change', (e) => {
+                graphSource = e.target.value;
+                loadWeatherData('left', leftCity);
+                loadWeatherData('right', rightCity);
+            });
             // Keep the LIVE tab fresh while it is the visible view.
             setInterval(() => {
                 const v = document.getElementById('liveView');
@@ -902,6 +994,7 @@
                 yesterday: { date: valid[0].yesterday.date, temps: [] },
                 today: { date: valid[0].today.date, temps: [] },
                 todayForecast: { date: valid[0].today.date, temps: [] },
+                tomorrowForecast: { date: valid[0].tomorrow.date, temps: [] },
                 tomorrow: { date: valid[0].tomorrow.date, temps: [] },
                 dayAfterTomorrow: { date: valid[0].dayAfterTomorrow.date, temps: [] },
                 pastDaysAvg: { date: 'avg', temps: [] },
@@ -911,7 +1004,7 @@
 
             // Calculate average for each hour
             for (let hour = 0; hour < 24; hour++) {
-                ['twoDaysAgo', 'yesterday', 'today', 'todayForecast', 'tomorrow', 'dayAfterTomorrow', 'pastDaysAvg'].forEach(day => {
+                ['twoDaysAgo', 'yesterday', 'today', 'todayForecast', 'tomorrowForecast', 'tomorrow', 'dayAfterTomorrow', 'pastDaysAvg'].forEach(day => {
                     let sum = 0;
                     let count = 0;
                     citiesData.forEach(cityData => {
@@ -929,14 +1022,17 @@
 
         // Fetch a city's weather data (handles the Czechia average + caching).
         // Shared by the graphs and the table so they always agree.
-        async function fetchCityData(cityName) {
+        async function fetchCityData(cityName, source = 'openmeteo') {
             // Only ever cache validated payloads — a cached error object would
             // keep breaking every render until the next manual refresh.
+            // The cache key includes the source, so Global-median (Graphs) and
+            // best_match (Table) data live side by side without collisions.
             const getOne = async (city) => {
-                if (cityDataCache[city]) return cityDataCache[city];
-                const data = await fetchJson(`/api/weather/${encodeURIComponent(city)}`);
+                const key = `${source}|${city}`;
+                if (cityDataCache[key]) return cityDataCache[key];
+                const data = await fetchJson(`/api/weather/${encodeURIComponent(city)}?source=${encodeURIComponent(source)}`);
                 if (!isWeatherPayload(data)) throw new Error(`Bad weather payload for ${city}`);
-                cityDataCache[city] = data;
+                cityDataCache[key] = data;
                 return data;
             };
             if (cityName === 'Czechia') {
@@ -953,11 +1049,12 @@
         // Load weather data for a chart
         async function loadWeatherData(side, cityName) {
             try {
-                const data = await fetchCityData(cityName);
+                const data = await fetchCityData(cityName, graphSource);
                 renderChart(side, cityName, data);
                 updateStatus(data.updatedAt);
                 loadVerification(side, cityName); // runs in the background
                 loadCrossCheck(side, cityName);   // runs in the background
+                loadRevisions(side, cityName);    // runs in the background
             } catch (err) {
                 console.error(`Error loading weather data for ${cityName}:`, err);
             }
@@ -1049,88 +1146,103 @@
         //    among themselves -> flag only (amber ▲), value unchanged.
         //  - agree: nothing to do.
 
-        // Remove overlays and restore the raw Today line.
+        function lineFor(chart, which) {
+            return chart.data.datasets.find(d => which === 'today' ? d._isToday : d._isTomorrow);
+        }
+
+        // Remove overlays and restore the raw Today/Tomorrow lines.
         function removeFlagDataset(side) {
             const chart = side === 'left' ? leftChart : rightChart;
             if (!chart) return;
             const before = chart.data.datasets.length;
             chart.data.datasets = chart.data.datasets.filter(d => !d._flag);
-            const today = chart.data.datasets.find(d => d._isToday);
-            const hadPatch = !!(today && chart._rawToday);
-            if (hadPatch) today.data = chart._rawToday;
-            chart._rawToday = null;
+            let restored = false;
+            for (const which of ['today', 'tomorrow']) {
+                const ds = lineFor(chart, which);
+                const raw = chart._raw && chart._raw[which];
+                if (ds && raw) { ds.data = raw; restored = true; }
+            }
+            chart._raw = null;
             chart._corrections = null;
-            if (chart.data.datasets.length !== before || hadPatch) chart.update();
+            if (chart.data.datasets.length !== before || restored) chart.update();
         }
 
         // Apply cross-check results to a chart: substitute consensus values on
-        // the Today line where corrected, and mark suspect hours.
+        // the Today AND Tomorrow lines where corrected, and mark suspect hours.
         function applyCrossCheck(side, data) {
             const chart = side === 'left' ? leftChart : rightChart;
             if (!chart) return;
             chart.data.datasets = chart.data.datasets.filter(d => !d._flag);
 
-            const today = chart.data.datasets.find(d => d._isToday);
-            if (today && chart._rawToday) today.data = chart._rawToday; // re-apply cleanly
-            chart._rawToday = null;
-            chart._corrections = null;
-
-            const corrected = data.correctedHours || [];
-            const flagged = data.suspectHours || [];
-
-            if (today && corrected.length) {
-                chart._rawToday = today.data;      // untouched original
-                const patched = today.data.slice(); // never mutate the cached raw array
-                const corrections = {};
-                corrected.forEach(h => {
-                    const row = data.hours[h];
-                    if (row && row.display !== null && row.display !== undefined) {
-                        corrections[h] = row.primary; // raw model value, for the tooltip
-                        patched[h] = row.display;
-                    }
-                });
-                today.data = patched;
-                chart._corrections = corrections;
-
-                const pts = Array(24).fill(null);
-                corrected.forEach(h => {
-                    const row = data.hours[h];
-                    if (row) pts[h] = row.display;
-                });
-                chart.data.datasets.push({
-                    _flag: true,
-                    label: '🛠 Consensus value',
-                    data: pts,
-                    showLine: false,
-                    pointStyle: 'rectRot',
-                    pointRadius: 7,
-                    pointHoverRadius: 9,
-                    pointBackgroundColor: '#00CED1',
-                    pointBorderColor: '#1a1a2e',
-                    pointBorderWidth: 1,
-                    order: 0,
-                });
+            for (const which of ['today', 'tomorrow']) {
+                const ds = lineFor(chart, which);
+                const raw = chart._raw && chart._raw[which];
+                if (ds && raw) ds.data = raw; // re-apply cleanly
             }
+            chart._raw = {};
+            chart._corrections = {};
 
-            if (flagged.length) {
-                const pts = Array(24).fill(null);
-                flagged.forEach(h => {
-                    const row = data.hours[h];
-                    pts[h] = (row && row.primary !== null && row.primary !== undefined) ? row.primary : null;
-                });
-                chart.data.datasets.push({
-                    _flag: true,
-                    label: '⚠ Low confidence',
-                    data: pts,
-                    showLine: false,
-                    pointStyle: 'triangle',
-                    pointRadius: 8,
-                    pointHoverRadius: 10,
-                    pointBackgroundColor: '#e9b44c',
-                    pointBorderColor: '#1a1a2e',
-                    pointBorderWidth: 1,
-                    order: 0,
-                });
+            const sections = [['today', data], ['tomorrow', data.tomorrow || {}]];
+            for (const [which, a] of sections) {
+                const ds = lineFor(chart, which);
+                const corrected = a.correctedHours || [];
+                const flagged = a.suspectHours || [];
+                const tag = which === 'tomorrow' ? ' (tomorrow)' : '';
+
+                if (ds && corrected.length) {
+                    chart._raw[which] = ds.data;       // untouched original
+                    const patched = ds.data.slice();    // never mutate the cached raw array
+                    const corrections = {};
+                    corrected.forEach(h => {
+                        const row = a.hours[h];
+                        if (row && row.display !== null && row.display !== undefined) {
+                            corrections[h] = row.primary; // raw model value, for the tooltip
+                            patched[h] = row.display;
+                        }
+                    });
+                    ds.data = patched;
+                    chart._corrections[which] = corrections;
+
+                    const pts = Array(24).fill(null);
+                    corrected.forEach(h => {
+                        const row = a.hours[h];
+                        if (row) pts[h] = row.display;
+                    });
+                    chart.data.datasets.push({
+                        _flag: true,
+                        label: '🛠 Consensus value' + tag,
+                        data: pts,
+                        showLine: false,
+                        pointStyle: 'rectRot',
+                        pointRadius: which === 'today' ? 7 : 6,
+                        pointHoverRadius: 9,
+                        pointBackgroundColor: '#00CED1',
+                        pointBorderColor: '#1a1a2e',
+                        pointBorderWidth: 1,
+                        order: 0,
+                    });
+                }
+
+                if (flagged.length) {
+                    const pts = Array(24).fill(null);
+                    flagged.forEach(h => {
+                        const row = a.hours[h];
+                        pts[h] = (row && row.primary !== null && row.primary !== undefined) ? row.primary : null;
+                    });
+                    chart.data.datasets.push({
+                        _flag: true,
+                        label: '⚠ Low confidence' + tag,
+                        data: pts,
+                        showLine: false,
+                        pointStyle: 'triangle',
+                        pointRadius: which === 'today' ? 8 : 6,
+                        pointHoverRadius: 10,
+                        pointBackgroundColor: '#e9b44c',
+                        pointBorderColor: '#1a1a2e',
+                        pointBorderWidth: 1,
+                        order: 0,
+                    });
+                }
             }
             chart.update();
         }
@@ -1144,6 +1256,8 @@
             if (cityName === 'Czechia') {
                 setBadge(key, 'error', '🔀 Cross-check: single cities', '',
                     'Cross-check runs on individual cities, not the Czechia average');
+                const agEl = document.getElementById(side + 'AgreeText');
+                if (agEl) agEl.textContent = '';
                 removeFlagDataset(side);
                 return;
             }
@@ -1162,10 +1276,23 @@
                 applyCrossCheck(side, data);
                 const corrected = data.correctedHours || [];
                 const flagged = data.suspectHours || [];
+                const tom = data.tomorrow || {};
+                const tomCorrected = tom.correctedHours || [];
+                const tomFlagged = tom.suspectHours || [];
                 const srcList = (data.sources || []).join(', ');
                 const hh = h => `${String(h).padStart(2, '0')}:00`;
 
-                if (!flagged.length && !corrected.length) {
+                // model-agreement readout in the revision strip
+                const agEl = document.getElementById(side + 'AgreeText');
+                if (agEl) {
+                    const bits = [];
+                    if (data.meanSpread !== null && data.meanSpread !== undefined) bits.push(`today ±${data.meanSpread.toFixed(1)}°`);
+                    if (tom.meanSpread !== null && tom.meanSpread !== undefined) bits.push(`tomorrow ±${tom.meanSpread.toFixed(1)}°`);
+                    agEl.innerHTML = bits.length ? ` · 🎯 model agreement: ${bits.join(', ')}` : '';
+                    agEl.title = 'Mean spread between independent models (ECMWF, ICON, GFS, Météo-France, MET Norway). Tight = confident forecast; wide = forecast risk.';
+                }
+
+                if (!flagged.length && !corrected.length && !tomFlagged.length && !tomCorrected.length) {
                     const html =
                         `<div class="vd-row vd-pass">✓ Today's values agree with ${data.sourceCount} independent source(s) within ${data.deviationLimit}°C.</div>` +
                         `<div class="vd-row vd-skip" style="margin-top:6px;">Sources: ${srcList}. Click the badge to hide.</div>`;
@@ -1175,17 +1302,23 @@
                 }
 
                 let html = '';
-                corrected.forEach(h => {
-                    const row = data.hours[h];
-                    const others = (row.others || []).map(o => `${o.label} ${o.temp.toFixed(1)}°`).join(', ');
-                    html += `<div class="vd-row vd-pass">🛠 ${hh(h)} — model showed <b>${row.primary.toFixed(1)}°</b>; ` +
-                        `${row.others.length} other sources sit within ${row.spread.toFixed(1)}°C of each other, so the chart shows their median <b>${row.display.toFixed(1)}°</b> (${others})</div>`;
-                });
-                flagged.forEach(h => {
-                    const row = data.hours[h];
-                    const others = (row.others || []).map(o => `${o.label} ${o.temp.toFixed(1)}°`).join(', ');
-                    html += `<div class="vd-row vd-fail">⚠ ${hh(h)} — shown <b>${row.primary.toFixed(1)}°</b> vs others' median ${row.median.toFixed(1)}°, but the sources also disagree among themselves (spread ${row.spread.toFixed(1)}°C) — flagged, not replaced (${others})</div>`;
-                });
+                const section = (label, a, corrH, flagH) => {
+                    if (!corrH.length && !flagH.length) return;
+                    html += `<div class="vd-row" style="color:#cfd8e3;font-weight:600;margin-top:6px;">${label}</div>`;
+                    corrH.forEach(h => {
+                        const row = a.hours[h];
+                        const others = (row.others || []).map(o => `${o.label} ${o.temp.toFixed(1)}°`).join(', ');
+                        html += `<div class="vd-row vd-pass">🛠 ${hh(h)} — model showed <b>${row.primary.toFixed(1)}°</b>; ` +
+                            `${row.others.length} other sources sit within ${row.spread.toFixed(1)}°C of each other, so the chart shows their median <b>${row.display.toFixed(1)}°</b> (${others})</div>`;
+                    });
+                    flagH.forEach(h => {
+                        const row = a.hours[h];
+                        const others = (row.others || []).map(o => `${o.label} ${o.temp.toFixed(1)}°`).join(', ');
+                        html += `<div class="vd-row vd-fail">⚠ ${hh(h)} — shown <b>${row.primary.toFixed(1)}°</b> vs others' median ${row.median.toFixed(1)}°, but the sources also disagree among themselves (spread ${row.spread.toFixed(1)}°C) — flagged, not replaced (${others})</div>`;
+                    });
+                };
+                section('Today', data, corrected, flagged);
+                section('Tomorrow', tom, tomCorrected, tomFlagged);
                 html += `<div class="vd-row vd-skip" style="margin-top:6px;">` +
                     `Replaced when the model is >${data.deviationLimit}°C from the median of ≥${data.consensusMinSources || 3} sources that agree within ${data.consensusSpreadLimit || 2}°C; ` +
                     `flagged only when the sources disagree too. Raw model values stay in the tooltip. Sources: ${srcList}. Click the badge to hide.</div>`;
@@ -1193,8 +1326,14 @@
                 const parts = [];
                 if (corrected.length) parts.push(`🛠 ${corrected.length} hr → consensus`);
                 if (flagged.length) parts.push(`⚠ ${flagged.length} hr flagged`);
+                if (tomCorrected.length || tomFlagged.length) {
+                    const tp = [];
+                    if (tomCorrected.length) tp.push(`🛠${tomCorrected.length}`);
+                    if (tomFlagged.length) tp.push(`⚠${tomFlagged.length}`);
+                    parts.push(`tom ${tp.join(' ')}`);
+                }
                 setBadge(key, 'warning', parts.join(' · '), html,
-                    corrected.length
+                    (corrected.length || tomCorrected.length)
                         ? 'Model outlier(s) replaced by the consensus of independent sources — click for details'
                         : 'Shown values disagree with independent sources at these hours');
             } catch (e) {
@@ -1204,14 +1343,67 @@
             }
         }
 
+        // ---- Forecast revisions (Δ vs yesterday's model run) ---------------
+        // The revision itself is tradeable information: a big warm-up/cool-down
+        // since the last run moves load forecasts and day-ahead prices.
+        // Follows the Graphs "Source" selector (median vs openmeteo).
+
+        async function loadRevisions(side, cityName) {
+            const el = document.getElementById(side + 'RevText');
+            if (!el) return;
+            el.innerHTML = '';
+            // The Czechia average has no single revision — use Prague as proxy.
+            const proxy = cityName === 'Czechia' ? 'Prague' : cityName;
+            try {
+                const r = await fetchJson(`/api/revisions/${encodeURIComponent(proxy)}?source=${encodeURIComponent(graphSource)}`);
+                const fm = d => (d > 0 ? '+' : '') + d.toFixed(1) + '°';
+                const parts = [];
+                if (r.tomorrow) {
+                    const hot = Math.abs(r.tomorrow.avg) >= 1.5 ? 'rev-hot' : '';
+                    parts.push(`<span class="${hot}">tomorrow <b>${fm(r.tomorrow.avg)}</b></span>` +
+                        ` (peak ${fm(r.tomorrow.peakAvg !== null && r.tomorrow.peakAvg !== undefined ? r.tomorrow.peakAvg : r.tomorrow.avg)}, ` +
+                        `max ${fm(r.tomorrow.max)} @${String(r.tomorrow.maxHour).padStart(2, '0')}:00)`);
+                }
+                if (r.today) parts.push(`today ${fm(r.today.avg)}`);
+                if (!parts.length) { el.innerHTML = ''; return; }
+                el.innerHTML = `🔁 Forecast vs yesterday's run: ${parts.join(' · ')}` +
+                    (cityName === 'Czechia' ? ' <span style="color:#7f8ea3">(Prague)</span>' : '');
+                el.title = 'How much the current forecast moved since yesterday\'s model run. Positive = warmer. Big revisions move load forecasts and day-ahead prices.';
+            } catch (e) {
+                el.innerHTML = '';
+            }
+        }
+
         // ---- Table view ---------------------------------------------------
 
         const tableCities = ['Czechia', ...czechCitiesForAverage, ...otherCities];
         let tableCity = 'Czechia';
-        const TABLE_HOURS = [0, 4, 8, 12, 16, 20];
+        const TABLE_HOURS = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22];
+        let tableDecimals = 0;       // cycled by the Dec button
+        let lastTableRender = null;  // re-render without refetching
 
-        function fmtTemp(v) {
-            return (v === null || v === undefined || Number.isNaN(v)) ? '—' : `${v.toFixed(1)}°`;
+        function fmtTemp(v, dp = 1) {
+            return (v === null || v === undefined || Number.isNaN(v)) ? '—' : `${v.toFixed(dp)}°`;
+        }
+
+        // Shared heat colouring (Table + History): position of v within
+        // [vMin, vMax] -> hue 120 (dark green, coldest) … 0 (dark red,
+        // warmest). Optional alpha fades forecast cells.
+        function heatColor(v, vMin, vMax, alpha) {
+            const t = vMax > vMin ? (v - vMin) / (vMax - vMin) : 0.5;
+            const hue = Math.round(120 * (1 - t));
+            return alpha === undefined
+                ? `hsl(${hue},62%,30%)`
+                : `hsla(${hue},62%,30%,${alpha})`;
+        }
+
+        // Forecast cells: SAME hue, but light background + dark text. Full
+        // readability (no fading), and the light/dark flip separates model
+        // data from actuals at a glance.
+        function heatColorLight(v, vMin, vMax) {
+            const t = vMax > vMin ? (v - vMin) / (vMax - vMin) : 0.5;
+            const hue = Math.round(120 * (1 - t));
+            return `hsl(${hue},58%,68%)`;
         }
 
         function setupTable() {
@@ -1223,21 +1415,29 @@
                 tableCity = e.target.value;
                 loadTable();
             });
+            const decBtn = document.getElementById('tableDecBtn');
+            decBtn.addEventListener('click', () => {
+                tableDecimals = (tableDecimals + 1) % 3;
+                decBtn.textContent = `Dec ${tableDecimals}`;
+                if (lastTableRender) renderTable(lastTableRender.cityName, lastTableRender.data);
+            });
         }
 
         function renderTable(cityName, data) {
+            lastTableRender = { cityName, data };
             const series = [
                 { key: 'pastDaysAvg',      label: 'Past Avg (3–7d)' },
                 { key: 'twoDaysAgo',       label: '2 Days Ago' },
                 { key: 'yesterday',        label: 'Yesterday' },
                 { key: 'today',            label: 'Today', highlight: true },
-                { key: 'todayForecast',    label: 'Today Forecast' },
-                { key: 'tomorrow',         label: 'Tomorrow' },
-                { key: 'dayAfterTomorrow', label: 'Day After' },
+                { key: 'todayForecast',    label: 'Today Fc', fc: true },
+                { key: 'tomorrow',         label: 'Tomorrow', fc: true },
+                { key: 'tomorrowForecast', label: 'Tomorrow Fc', fc: true },
+                { key: 'dayAfterTomorrow', label: 'Day After', fc: true },
             ];
             const displayName = cityName === 'Czechia' ? 'Czechia (Average)' : cityName;
 
-            let html = `<table class="data-table"><caption>Temperatures in ${displayName} — every 4 hours (°C, CET/CEST)</caption>`;
+            let html = `<table class="data-table"><caption>Temperatures in ${displayName} — every 2 hours (°C, CET/CEST)</caption>`;
             html += `<thead><tr><th class="time-col">Time</th>`;
             series.forEach(s => {
                 const d = (data[s.key] && data[s.key].date && data[s.key].date !== 'avg')
@@ -1246,18 +1446,32 @@
             });
             html += `</tr></thead><tbody>`;
 
+            // Heat colouring scaled to every value currently shown.
+            const vals = [];
+            TABLE_HOURS.forEach(h => series.forEach(s => {
+                const arr = (data[s.key] && data[s.key].temps) ? data[s.key].temps : [];
+                if (typeof arr[h] === 'number') vals.push(arr[h]);
+            }));
+            const vMin = vals.length ? Math.min(...vals) : 0;
+            const vMax = vals.length ? Math.max(...vals) : 0;
+
             TABLE_HOURS.forEach(h => {
                 html += `<tr><td class="time-col">${String(h).padStart(2, '0')}:00</td>`;
                 series.forEach(s => {
                     const arr = (data[s.key] && data[s.key].temps) ? data[s.key].temps : [];
                     const v = arr[h];
-                    const na = (v === null || v === undefined);
-                    const cls = `${s.highlight ? 'today-col' : ''}${na ? ' na' : ''}`.trim();
-                    html += `<td class="${cls}">${fmtTemp(v)}</td>`;
+                    // Forecast columns: same hue, light cell + dark text (fully
+                    // readable, clearly not actuals). Past/today: dark + white.
+                    html += (v === null || v === undefined)
+                        ? '<td class="na">—</td>'
+                        : (s.fc
+                            ? `<td style="background:${heatColorLight(v, vMin, vMax)};color:#0d1520;font-style:italic;font-weight:600;">${fmtTemp(v, tableDecimals)}</td>`
+                            : `<td style="background:${heatColor(v, vMin, vMax)};color:#f5f7f9;font-weight:600;">${fmtTemp(v, tableDecimals)}</td>`);
                 });
                 html += `</tr>`;
             });
             html += `</tbody></table>`;
+            html += `<div style="text-align:center;margin-top:10px;font-size:0.72rem;color:#7f8ea3;">Dark cell + white text = actual · light cell + dark italic = forecast. "Fc" columns show what yesterday's model run predicted — the gap vs the current value is the forecast revision.</div>`;
             document.getElementById('tableContainer').innerHTML = html;
         }
 
@@ -1276,9 +1490,10 @@
 
         // ---- Preparation (CZ / HU) ----------------------------------------
 
+        // flag: inline SVG markup (see .flag CSS — emoji flags don't render on Windows)
         const PREP_CONFIG = {
-            CZ: { capital: 'Prague',   container: 'czPrepContainer', legend: 'czPrepLegend' },
-            HU: { capital: 'Budapest', container: 'huPrepContainer', legend: 'huPrepLegend' },
+            CZ: { capital: 'Prague',   container: 'czPrepContainer', legend: 'czPrepLegend', flag: '<svg class="flag" viewBox="0 0 900 600" aria-hidden="true"><rect width="900" height="600" fill="#fff"/><rect y="300" width="900" height="300" fill="#d7141a"/><path d="M0 0 450 300 0 600Z" fill="#11457e"/></svg>' },
+            HU: { capital: 'Budapest', container: 'huPrepContainer', legend: 'huPrepLegend', flag: '<svg class="flag" viewBox="0 0 900 600" aria-hidden="true"><rect width="900" height="600" fill="#436f4d"/><rect width="900" height="400" fill="#fff"/><rect width="900" height="200" fill="#cd2a3e"/></svg>' },
         };
 
         // Hover explanations for each category (shown as native tooltips).
@@ -1401,11 +1616,13 @@
 
             document.getElementById(cfg.container).innerHTML = `
                 <table class="prep-table">
-                    <caption>${country} (${cfg.capital}) — 5-day overview</caption>
-                    <thead><tr><th class="row-label">${country} (${cfg.capital})</th>${head}</tr></thead>
+                    <caption>${cfg.flag} ${country} (${cfg.capital}) — 6-day overview</caption>
+                    <thead><tr><th class="row-label">${cfg.flag} ${country} (${cfg.capital})</th>${head}</tr></thead>
                     <tbody>
                         ${tempRow('🌡️ Temp 8:00', 'h8', PREP_TIPS.temp)}
+                        ${tempRow('🌡️ Temp 12:00', 'h12', PREP_TIPS.temp)}
                         ${tempRow('🌡️ Temp 16:00', 'h16', PREP_TIPS.temp)}
+                        ${tempRow('🌡️ Temp 20:00', 'h20', PREP_TIPS.temp)}
                         ${tempRow('🌡️ Temp 0:00', 'h0', PREP_TIPS.tempNight)}
                         ${textRow('🎚️ Pressure', d => d.pressure.class, PREP_TIPS.pressure)}
                         ${textRow('💨 Wind', d => d.wind.class, PREP_TIPS.wind)}
@@ -1424,6 +1641,163 @@
                 '<span class="swatch swing-r"></span> lower' +
                 '<span class="swatch swing-dr"></span> much lower' +
                 `<div class="note">Source: Open-Meteo for ${cfg.capital} (used as the ${country} proxy). Generated ${when}.</div>`;
+        }
+
+        // ---- History tab ----------------------------------------------------
+        // Hour-by-hour ACTUAL past temperatures for one city and one ISO week
+        // (Mon–Sun) of this year, from /api/history. Source is either
+        // Open-Meteo's best_match alone ("Openmeteo") or the per-hour median
+        // of all implemented sources ("Global median"). Hours that have not
+        // happened yet are blank — this tab never shows forecast values.
+
+        const HISTORY_CITIES = [...czechCitiesForAverage, ...otherCities];
+        const HISTORY_SOURCES = [
+            { id: 'median',    label: 'Global median' },
+            { id: 'openmeteo', label: 'Openmeteo' },
+        ];
+        let historyCity = 'Prague';
+        let historyWeek = null;      // set in setupHistory()
+        let historySource = 'median';
+        let historyDecimals = 0;     // cycled by the Dec button
+        let lastHistoryData = null;  // re-render without refetching
+
+        // ISO week number (Monday-first) of a 'YYYY-MM-DD' string — the same
+        // algorithm as the server's isoWeekOf, kept in lockstep.
+        function isoWeekOfStr(dateStr) {
+            const [y, m, d] = dateStr.split('-').map(Number);
+            const dt = new Date(Date.UTC(y, m - 1, d));
+            const dow = (dt.getUTCDay() + 6) % 7;
+            dt.setUTCDate(dt.getUTCDate() - dow + 3);
+            const year = dt.getUTCFullYear();
+            const jan4 = new Date(Date.UTC(year, 0, 4));
+            const week1Mon = new Date(Date.UTC(year, 0, 4 - ((jan4.getUTCDay() + 6) % 7)));
+            return { year, week: 1 + Math.round(((dt - week1Mon) / 86400000 - 3) / 7) };
+        }
+
+        // Mon..Sun as Date objects (UTC-anchored) of ISO week `week` in `year`.
+        function isoWeekDatesClient(year, week) {
+            const jan4 = new Date(Date.UTC(year, 0, 4));
+            const week1Mon = new Date(Date.UTC(year, 0, 4 - ((jan4.getUTCDay() + 6) % 7)));
+            const out = [];
+            for (let i = 0; i < 7; i++) {
+                out.push(new Date(week1Mon.getTime() + ((week - 1) * 7 + i) * 86400000));
+            }
+            return out;
+        }
+
+        // Today's date string in the app timezone (same zone the server uses),
+        // so the week list and the "today" column can't drift around midnight.
+        function pragueToday() {
+            return new Intl.DateTimeFormat('en-CA', {
+                timeZone: 'Europe/Prague', year: 'numeric', month: '2-digit', day: '2-digit'
+            }).format(new Date());
+        }
+
+        function setupHistory() {
+            const cs = document.getElementById('historyCitySelect');
+            cs.innerHTML = HISTORY_CITIES.map(c =>
+                `<option value="${c}" ${c === historyCity ? 'selected' : ''}>${c}</option>`).join('');
+            cs.addEventListener('change', e => { historyCity = e.target.value; loadHistory(); });
+
+            const { year, week: cur } = isoWeekOfStr(pragueToday());
+            historyWeek = cur;
+            const fmt = new Intl.DateTimeFormat('en-GB', { timeZone: 'UTC', day: 'numeric', month: 'short' });
+            const opts = [];
+            for (let w = cur + 2; w >= 1; w--) {
+                const ds = isoWeekDatesClient(year, w);
+                const range = `${fmt.format(ds[0])} – ${fmt.format(ds[6])}`;
+                const tag = w === cur ? ' — current' : (w > cur ? ' — upcoming' : '');
+                opts.push(`<option value="${w}" ${w === cur ? 'selected' : ''}>Week ${w} (${range})${tag}</option>`);
+            }
+            const ws = document.getElementById('historyWeekSelect');
+            ws.innerHTML = opts.join('');
+            ws.addEventListener('change', e => { historyWeek = parseInt(e.target.value, 10); loadHistory(); });
+
+            const ss = document.getElementById('historySourceSelect');
+            ss.innerHTML = HISTORY_SOURCES.map(s =>
+                `<option value="${s.id}" ${s.id === historySource ? 'selected' : ''}>${s.label}</option>`).join('');
+            ss.addEventListener('change', e => { historySource = e.target.value; loadHistory(); });
+
+            const decBtn = document.getElementById('historyDecBtn');
+            decBtn.addEventListener('click', () => {
+                historyDecimals = (historyDecimals + 1) % 3;
+                decBtn.textContent = `Dec ${historyDecimals}`;
+                if (lastHistoryData) renderHistory(lastHistoryData);
+            });
+        }
+
+        async function loadHistory() {
+            if (historyWeek === null) return;
+            const container = document.getElementById('historyContainer');
+            container.innerHTML = '<div style="color:#8fa3b8;padding:10px;">Loading…</div>';
+            document.getElementById('historyLegend').innerHTML = '';
+            try {
+                const res = await fetch(`/api/history/${encodeURIComponent(historyCity)}?week=${historyWeek}&source=${encodeURIComponent(historySource)}`);
+                const data = await res.json().catch(() => null);
+                if (!res.ok || !data || !Array.isArray(data.temps)) {
+                    container.innerHTML = `<div class="error">${(data && data.error) || 'Could not load history data.'}</div>`;
+                    return;
+                }
+                renderHistory(data);
+            } catch (e) {
+                console.error('Error loading history:', e);
+                container.innerHTML = '<div class="error">Could not load history data.</div>';
+            }
+        }
+
+        function renderHistory(data) {
+            lastHistoryData = data;
+            const today = pragueToday();
+            const srcLabel = data.source === 'median' ? 'Global median' : 'Openmeteo';
+
+            let html = `<table class="data-table"><caption>📖 ${data.city} — Week ${data.week}, ${data.year} (${data.start} → ${data.end}) · ${srcLabel} (°C, CET/CEST)</caption>`;
+            html += '<thead><tr><th class="time-col">Time</th>';
+            data.days.forEach(d => {
+                const isToday = d === today;
+                html += `<th class="${isToday ? 'today-col' : ''}">${weekdayName(d).slice(0, 3)}${isToday ? ' · today' : ''}` +
+                        `<br><span style="font-weight:400;color:#7a8a9a;font-size:0.7rem;">${d}</span></th>`;
+            });
+            html += '</tr></thead><tbody>';
+
+            // Heat colouring scaled to the displayed week (see heatColor).
+            // Hours after the server's cutoff are FORECAST values: same hue
+            // but LIGHT cell + dark italic text — fully readable (the old
+            // faded rendering was hard to read), and the light/dark flip
+            // makes model data obvious at a glance.
+            const vals = [];
+            data.temps.forEach(row => row.forEach(v => { if (typeof v === 'number') vals.push(v); }));
+            const vMin = vals.length ? Math.min(...vals) : 0;
+            const vMax = vals.length ? Math.max(...vals) : 0;
+            const cut = data.cutoff || { date: today, hour: 23 };
+            const isForecast = (d, h) => d > cut.date || (d === cut.date && h > cut.hour);
+
+            for (let h = 0; h < 24; h++) {
+                html += `<tr><td class="time-col">${String(h).padStart(2, '0')}:00</td>`;
+                for (let d = 0; d < 7; d++) {
+                    const v = data.temps[h][d];
+                    if (v === null || v === undefined) { html += '<td class="na">—</td>'; continue; }
+                    html += isForecast(data.days[d], h)
+                        ? `<td style="background:${heatColorLight(v, vMin, vMax)};color:#0d1520;font-style:italic;font-weight:600;">${fmtTemp(v, historyDecimals)}</td>`
+                        : `<td style="background:${heatColor(v, vMin, vMax)};color:#f5f7f9;font-weight:600;">${fmtTemp(v, historyDecimals)}</td>`;
+                }
+                html += '</tr>';
+            }
+            html += '</tbody></table>';
+            document.getElementById('historyContainer').innerHTML = html;
+
+            const names = (data.sources || []).map(s => s.label).join(', ');
+            const srcNote = data.source === 'median'
+                ? `<strong>Global median</strong> — each cell is the per-hour median of the sources covering this location, here: ${names || 'none'}. Sources with no coverage (e.g. MET Norway outside the Nordics) are skipped automatically.`
+                : `<strong>Openmeteo</strong> — values come from Open-Meteo's default best-match model.`;
+            const when = data.generatedAt ? new Date(data.generatedAt).toLocaleString() : '';
+            const sw = h => `<span class="swatch" style="background:hsl(${h},62%,30%)"></span>`;
+            document.getElementById('historyLegend').innerHTML =
+                `<strong>Colour = position within this week's range:</strong> ` +
+                `${sw(120)} coldest (${fmtTemp(vals.length ? vMin : null, historyDecimals)}) ` +
+                `${sw(60)} middle ` +
+                `${sw(0)} warmest (${fmtTemp(vals.length ? vMax : null, historyDecimals)})<br>` +
+                `<strong>Dark cell + white text</strong> = already happened · <em>light cell + dark italic = model forecast</em> · blank (—) = beyond the ~16-day forecast horizon.<br>` +
+                `${srcNote}<div class="note">Data: Open-Meteo ${data.endpoint}. Generated ${when}.</div>`;
         }
 
         // ---- LIVE tab -----------------------------------------------------
@@ -1542,6 +1916,7 @@
             wind:   'Hourly wind at ~120 m hub height pushed through a simplified turbine power curve (cut-in 11, rated 43, cut-out 90 km/h), averaged over the day, 0–100%. Higher = more wind generation.',
             risks:  'Grid-relevant weather hazards: storms, cut-out-level gusts, morning fog (late solar ramp), snow, heat, frost, heavy rain.',
             signal: 'Plain-language day-over-day read of the fundamentals, plus the implied direction of residual load (demand minus renewables). Fundamentals only — not price advice.',
+            fcstab: 'Forecast stability (capital-city proxy): Δ = how much the temperature forecast moved since yesterday\'s model run (positive = warmer; amber when ≥1.5°C — that is a market-moving revision), and ± = mean disagreement between independent models (ECMWF, ICON, GFS, Météo-France, MET Norway). Big Δ or wide ± = forecast risk.',
         };
 
         function mkArrow(dir) {
@@ -1606,18 +1981,43 @@
             return html + '</div>';
         }
 
-        function renderMarketCard(data) {
+        // Forecast-stability cell: temperature revision vs yesterday's run
+        // (capital-city proxy) + how tightly independent models agree.
+        function mkFcCell(d, extra) {
+            if (d.context) return '<span class="mk-ok">—</span>';
+            const isToday = d.label === 'Today', isTom = d.label === 'Tomorrow';
+            if (!isToday && !isTom) return '<span class="mk-ok">—</span>';
+            const rev = extra && extra.rev ? (isToday ? extra.rev.today : extra.rev.tomorrow) : null;
+            let spread = null;
+            if (extra && extra.cc) {
+                spread = isTom ? (extra.cc.tomorrow && extra.cc.tomorrow.meanSpread) : extra.cc.meanSpread;
+            }
+            if (!rev && (spread === null || spread === undefined)) return '<span class="mk-ok">—</span>';
+            let html = '';
+            if (rev) {
+                const hot = Math.abs(rev.avg) >= 1.5;
+                html += `<span class="mk-big" style="font-size:1rem;${hot ? 'color:#e9b44c' : ''}">Δ ${rev.avg > 0 ? '+' : ''}${rev.avg.toFixed(1)}°</span>` +
+                        `<span class="mk-sub">vs yesterday's run</span>`;
+            }
+            if (spread !== null && spread !== undefined) {
+                html += `<span class="mk-sub">models ±${spread.toFixed(1)}°</span>`;
+            }
+            return html;
+        }
+
+        function renderMarketCard(data, extra) {
             const days = data.days || [];
             const head = days.map(d => {
                 const wd = weekdayName(d.date);
                 return `<th class="${d.context ? 'ctx' : ''}">${d.label}` +
+                    (d.context ? '<span class="actual-tag">actual</span>' : '') +
                     `<span class="col-date">${d.date || ''}</span>` +
                     (wd ? `<span class="col-day">${wd}</span>` : '') + `</th>`;
             }).join('');
 
             const row = (label, tip, cellFn) => {
                 let r = `<th class="row-label" title="${tip}">${label}</th>`;
-                days.forEach(d => { r += `<td class="${d.context ? 'ctx' : ''}">${cellFn(d)}</td>`; });
+                days.forEach(d => { r += `<td class="${d.context ? 'ctx' : ''}">${cellFn(d, extra)}</td>`; });
                 return `<tr>${r}</tr>`;
             };
 
@@ -1632,6 +2032,7 @@
                                 ${row('🌡️ Demand', MARKET_TIPS.demand, mkDemandCell)}
                                 ${row('☀️ Solar (FVE)', MARKET_TIPS.solar, mkSolarCell)}
                                 ${row('💨 Wind gen', MARKET_TIPS.wind, mkWindCell)}
+                                ${row('🔮 Fc stability', MARKET_TIPS.fcstab, mkFcCell)}
                                 ${row('⚠️ Risks', MARKET_TIPS.risks, mkRiskCell)}
                                 ${row('🧭 Signal', MARKET_TIPS.signal, mkSignalCell)}
                             </tbody>
@@ -1646,13 +2047,23 @@
                 grid.innerHTML = '<div style="color:#8fa3b8;padding:10px;">Loading market brief…</div>';
             }
             try {
-                const results = await Promise.all(['CZ', 'HU'].map(c =>
-                    fetchJson(`/api/market/${c}`).catch(e => {
-                        console.error(`Market ${c} failed:`, e);
-                        return null;
-                    })
-                ));
-                const cards = results.filter(Boolean).map(renderMarketCard);
+                const caps = { CZ: 'Prague', HU: 'Budapest' };
+                const [results, extras] = await Promise.all([
+                    Promise.all(['CZ', 'HU'].map(c =>
+                        fetchJson(`/api/market/${c}`).catch(e => {
+                            console.error(`Market ${c} failed:`, e);
+                            return null;
+                        })
+                    )),
+                    Promise.all(['CZ', 'HU'].map(async c => {
+                        const [rev, cc] = await Promise.all([
+                            fetchJson(`/api/revisions/${caps[c]}`).catch(() => null),
+                            fetchJson(`/api/crosscheck/${caps[c]}`).catch(() => null)
+                        ]);
+                        return { rev, cc };
+                    }))
+                ]);
+                const cards = results.map((r, i) => r ? renderMarketCard(r, extras[i]) : null).filter(Boolean);
                 if (!cards.length) {
                     grid.innerHTML = '<div class="error">Could not load the market brief.</div>';
                     document.getElementById('marketLegend').innerHTML = '';
@@ -1678,6 +2089,7 @@
             table:  { view: 'tableView',  tab: 'tabTable' },
             czprep: { view: 'czPrepView', tab: 'tabCzPrep' },
             huprep: { view: 'huPrepView', tab: 'tabHuPrep' },
+            history: { view: 'historyView', tab: 'tabHistory' },
             live:   { view: 'liveView',   tab: 'tabLive' },
             market: { view: 'marketView', tab: 'tabMarket' },
         };
@@ -1692,6 +2104,7 @@
             if (tab === 'table') loadTable();
             if (tab === 'czprep') loadPreparation('CZ');
             if (tab === 'huprep') loadPreparation('HU');
+            if (tab === 'history') loadHistory();
             if (tab === 'live') loadLive();
             if (tab === 'market') loadMarket();
         }
@@ -1724,6 +2137,7 @@
                 if (document.getElementById('tableView').style.display !== 'none') loadTable();
                 if (document.getElementById('czPrepView').style.display !== 'none') loadPreparation('CZ');
                 if (document.getElementById('huPrepView').style.display !== 'none') loadPreparation('HU');
+                if (document.getElementById('historyView').style.display !== 'none') loadHistory();
                 if (document.getElementById('liveView').style.display !== 'none') loadLive();
                 if (document.getElementById('marketView').style.display !== 'none') loadMarket();
             } catch (err) {
@@ -1742,6 +2156,7 @@
                 ...data.yesterday.temps,
                 ...data.today.temps,
                 ...(data.todayForecast ? data.todayForecast.temps : []),
+                ...(data.tomorrowForecast ? data.tomorrowForecast.temps : []),
                 ...data.tomorrow.temps,
                 ...data.dayAfterTomorrow.temps,
                 ...(data.pastDaysAvg ? data.pastDaysAvg.temps : [])
@@ -1931,6 +2346,7 @@
                         },
                         {
                             // Tomorrow - dashed light green (longer dashes)
+                            _isTomorrow: true, // cross-check corrections target this line too
                             label: `Tomorrow (${data.tomorrow.date})`,
                             data: data.tomorrow.temps,
                             borderColor: '#90EE90',
@@ -1941,6 +2357,21 @@
                             pointRadius: 0,
                             pointHoverRadius: 4,
                             order: 2,
+                        },
+                        {
+                            // Tomorrow Fc — what yesterday's run predicted for tomorrow.
+                            // The gap between this and the Tomorrow line IS the forecast
+                            // revision (also summarised in the strip above the chart).
+                            label: `Tomorrow Fc (prev run)`,
+                            data: data.tomorrowForecast ? data.tomorrowForecast.temps : Array(24).fill(null),
+                            borderColor: '#00CED1',
+                            backgroundColor: 'transparent',
+                            borderWidth: 2,
+                            borderDash: [2, 4],
+                            tension: 0.3,
+                            pointRadius: 0,
+                            pointHoverRadius: 4,
+                            order: 2.5,
                         },
                         {
                             // Day After Tomorrow - thin dotted light green
@@ -1988,8 +2419,11 @@
                                     if (context.parsed.y !== null) {
                                         let txt = `${context.dataset.label}: ${context.parsed.y.toFixed(1)}°C`;
                                         // On consensus-corrected hours, keep the raw model value visible.
-                                        const corr = context.chart._corrections;
-                                        if (corr && context.dataset._isToday && corr[context.dataIndex] !== undefined) {
+                                        const which = context.dataset._isToday ? 'today'
+                                                    : (context.dataset._isTomorrow ? 'tomorrow' : null);
+                                        const corrAll = context.chart._corrections;
+                                        const corr = which && corrAll ? corrAll[which] : null;
+                                        if (corr && corr[context.dataIndex] !== undefined) {
                                             const raw = corr[context.dataIndex];
                                             txt += raw === null || raw === undefined
                                                 ? ' (consensus fill)'
